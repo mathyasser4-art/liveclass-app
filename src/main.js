@@ -150,6 +150,7 @@ const setUpFloating = (win, openerId, name) => {
     const pending = pendingSizes.get(`${openerId}:${name}`);
     pendingSizes.delete(`${openerId}:${name}`);
     if (pending) applySize(win, openerId, name, pending[0], pending[1]);
+    attachToLayer(openerId);
 };
 
 // A toolbar dropped within reach of the left or right screen edge docks there and turns vertical.
@@ -167,14 +168,39 @@ const dockSide = (win) => {
 const setUpOverlay = (win, openerId) => {
     const kids = childrenOf(openerId);
     kids.overlay = win;
+    win.lcFocusable = false;
     win.setBounds(sharedDisplay(openerId).bounds);
     win.setAlwaysOnTop(true, process.platform === 'darwin' ? 'floating' : 'screen-saver');
     win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
     win.setIgnoreMouseEvents(true);
     win.setContentProtection(true);
+    attachToLayer(openerId);
     raiseFloating(openerId);
+    // The toolbars outlive the layer when a New Share switches from a screen to a window.
+    win.on('close', () => {
+        FLOATING.forEach((name) => {
+            const w = childrenOf(openerId)[name];
+            if (w && !w.isDestroyed() && w.getParentWindow() === win) {
+                w.setParentWindow(null);
+                w.setAlwaysOnTop(true, 'screen-saver');
+            }
+        });
+    });
     win.on('closed', () => { if (childrenOf(openerId).overlay === win) delete childrenOf(openerId).overlay; });
 };
+
+// All these windows are "always on top", and Windows doesn't keep an order among them: after a click
+// on the drawing layer it could end up over the toolbars, which then took no clicks. A window's own
+// windows always stay above it, so the toolbars and the preview belong to the layer.
+function attachToLayer(openerId) {
+    const kids = childrenOf(openerId);
+    const layer = kids.overlay;
+    if (!layer || layer.isDestroyed()) return;
+    FLOATING.forEach((name) => {
+        const w = kids[name];
+        if (w && !w.isDestroyed() && w.getParentWindow() !== layer) w.setParentWindow(layer);
+    });
+}
 
 function wireContents(contents) {
     contents.setWindowOpenHandler(({ url, frameName }) => {
@@ -445,8 +471,13 @@ ipcMain.on('lc:annotating', (event, mode) => {
     const layer = kids.overlay;
     if (!layer || layer.isDestroyed()) return;
     layer.setIgnoreMouseEvents(!mode);
-    layer.setFocusable(mode === 'text');
-    if (mode === 'text') layer.focus();
+    // Only the text tool needs the keyboard; changing this re-arranges the window, so only on change.
+    const wantFocus = mode === 'text';
+    if (layer.lcFocusable !== wantFocus) {
+        layer.lcFocusable = wantFocus;
+        layer.setFocusable(wantFocus);
+    }
+    if (wantFocus) layer.focus();
     raiseFloating(event.sender.id);
 });
 
