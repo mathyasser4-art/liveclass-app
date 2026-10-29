@@ -132,9 +132,34 @@ const setUpFloating = (win, openerId, name) => {
     if (name === VIDEOS) win.setPosition(area.x + area.width - width - 16, area.y + 64);
     else win.setPosition(Math.round(area.x + (area.width - width) / 2), area.y + (name === ANNOT_BAR ? 58 : 6));
     win.on('closed', () => { if (childrenOf(openerId)[name] === win) delete childrenOf(openerId)[name]; });
+    if (name !== VIDEOS) {
+        // Decided once the window stops moving (a drag fires "move" all the way).
+        let settle = null;
+        win.on('move', () => {
+            clearTimeout(settle);
+            settle = setTimeout(() => {
+                if (win.isDestroyed()) return;
+                const side = dockSide(win);
+                if (side === (win.lcDock || '')) return;
+                win.lcDock = side;
+                const opener = webContents.fromId(openerId);
+                if (opener && !opener.isDestroyed()) opener.send('lc:dock', { name, side });
+            }, 300);
+        });
+    }
     const pending = pendingSizes.get(`${openerId}:${name}`);
     pendingSizes.delete(`${openerId}:${name}`);
     if (pending) applySize(win, openerId, name, pending[0], pending[1]);
+};
+
+// A toolbar dropped within reach of the left or right screen edge docks there and turns vertical.
+const DOCK_REACH = 40;
+const dockSide = (win) => {
+    const b = win.getBounds();
+    const area = screen.getDisplayMatching(b).workArea;
+    if (b.x <= area.x + DOCK_REACH) return 'left';
+    if (b.x + b.width >= area.x + area.width - DOCK_REACH) return 'right';
+    return '';
 };
 
 // The drawing layer: covers the shared screen, lets the mouse through unless drawing, never takes
@@ -158,7 +183,8 @@ function wireContents(contents) {
                 action: 'allow',
                 overrideBrowserWindowOptions: {
                     frame: false, transparent: true, backgroundColor: '#00000000', hasShadow: false, resizable: false,
-                    minimizable: false, maximizable: false, fullscreenable: false, skipTaskbar: true, title: 'LiveClass', icon: ICON
+                    minimizable: false, maximizable: false, fullscreenable: false, skipTaskbar: true, title: 'LiveClass', icon: ICON,
+                    show: frameName !== ANNOT_BAR
                 }
             };
         }
@@ -209,11 +235,16 @@ function wireContents(contents) {
     });
 
     const id = contents.id;
-    contents.on('destroyed', () => {
+    const closeKids = () => {
         const kids = children.get(id) || {};
         [...FLOATING.map((name) => kids[name]), kids.overlay].forEach((w) => { if (w && !w.isDestroyed()) w.close(); });
         children.delete(id);
         shares.delete(id);
+    };
+    contents.on('destroyed', closeKids);
+    // A reload or another page: the old page's share windows go with it.
+    contents.on('did-start-navigation', (details) => {
+        if (details && details.isMainFrame && !details.isSameDocument) closeKids();
     });
 }
 
@@ -381,9 +412,28 @@ function applySize(win, openerId, name, width, height) {
         return;
     }
     const old = win.getBounds();
-    const x = name === VIDEOS ? old.x + old.width - w : Math.round(old.x + (old.width - w) / 2);
-    win.setBounds({ x, y: old.y, width: w, height: h });
+    const area = screen.getDisplayMatching(old).workArea;
+    // Docked toolbars hug their edge (and grow away from it); others grow from their middle.
+    let x;
+    if (win.lcDock === 'left') x = area.x + 4;
+    else if (win.lcDock === 'right') x = area.x + area.width - w - 4;
+    else x = name === VIDEOS ? old.x + old.width - w : Math.round(old.x + (old.width - w) / 2);
+    // An undocked toolbar stays clear of the edges, so growing it can't dock it again.
+    if (!win.lcDock && name !== VIDEOS) {
+        x = Math.max(area.x + DOCK_REACH + 8, Math.min(x, area.x + area.width - w - DOCK_REACH - 8));
+    }
+    const y = Math.max(area.y, Math.min(old.y, area.y + area.height - h));
+    win.setBounds({ x, y, width: w, height: h });
 }
+
+ipcMain.on('lc:float-visible', (event, name, visible) => {
+    if (!fromOurs(event) || !FLOATING.includes(name)) return;
+    const win = (children.get(event.sender.id) || {})[name];
+    if (!win || win.isDestroyed()) return;
+    if (!visible) return win.hide();
+    win.showInactive();
+    return raiseFloating(event.sender.id);
+});
 
 ipcMain.handle('lc:share-info', (event) => (fromOurs(event) ? shares.get(event.sender.id) || null : null));
 

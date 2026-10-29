@@ -21,7 +21,14 @@ contextBridge.exposeInMainWorld('satDesktop', {
     // keyboard too for the text tool ('text').
     setAnnotating: (mode) => ipcRenderer.send('lc:annotating', mode === 'text' || mode === 'draw' ? mode : false),
     // Sizes a floating window ('lc-bar', 'lc-annotbar', 'lc-videos'); the pill and pen bar stay centred.
-    setFloatingSize: (name, width, height) => ipcRenderer.send('lc:float-size', String(name), Number(width), Number(height))
+    setFloatingSize: (name, width, height) => ipcRenderer.send('lc:float-size', String(name), Number(width), Number(height)),
+    setFloatingVisible: (name, visible) => ipcRenderer.send('lc:float-visible', String(name), !!visible),
+    // A toolbar was dropped at a screen edge ('left' / 'right') or away from it (''); returns an unsubscribe.
+    onDock: (fn) => {
+        const listener = (event, dock) => fn(dock);
+        ipcRenderer.on('lc:dock', listener);
+        return () => ipcRenderer.removeListener('lc:dock', listener);
+    }
 });
 
 // The first-launch site choice (site.html) runs in the main window too.

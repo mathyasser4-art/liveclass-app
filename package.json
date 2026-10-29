@@ -1,7 +1,7 @@
 {
   "name": "liveclass-desktop",
   "productName": "LiveClass",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "LiveClass desktop app for teachers: share anything and annotate anywhere on the screen",
   "author": "SATAREA",
   "private": true,
