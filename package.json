@@ -1,0 +1,66 @@
+{
+  "name": "liveclass-desktop",
+  "productName": "LiveClass",
+  "version": "1.0.0",
+  "description": "LiveClass desktop app for teachers: share anything and annotate anywhere on the screen",
+  "author": "SATAREA",
+  "private": true,
+  "main": "src/main.js",
+  "scripts": {
+    "start": "electron .",
+    "dist:win": "electron-builder --win",
+    "dist:mac": "electron-builder --mac"
+  },
+  "devDependencies": {
+    "electron": "45.1.0",
+    "electron-builder": "26.18.0"
+  },
+  "build": {
+    "appId": "tech.satarea.liveclass",
+    "productName": "LiveClass",
+    "copyright": "SATAREA",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "src/**/*",
+      "assets/icon.png",
+      "package.json"
+    ],
+    "icon": "assets/icon.png",
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "artifactName": "LiveClass-Setup-${version}.${ext}"
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "LiveClass"
+    },
+    "mac": {
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "universal"
+          ]
+        }
+      ],
+      "category": "public.app-category.education",
+      "artifactName": "LiveClass-${version}.${ext}",
+      "extendInfo": {
+        "NSCameraUsageDescription": "LiveClass uses the camera for your video in class.",
+        "NSMicrophoneUsageDescription": "LiveClass uses the microphone so students can hear you."
+      }
+    }
+  }
+}
