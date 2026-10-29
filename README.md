@@ -6,12 +6,18 @@ adds what a browser can't do:
 
 - **Own share picker** (screens and windows, optional computer sound on Windows) and **no browser
   "Stop sharing / Hide" bar**.
-- **The meeting window minimizes when sharing starts** and comes back when it stops; the floating
-  control bar stays on top of everything.
-- **Annotate anywhere**: when a whole screen is shared, a see-through drawing layer covers it, so
-  the teacher draws on any program (PowerPoint, PDF, browser…). The mouse goes through the layer
-  unless a pen is picked. When one window is shared, drawing happens in the floating bar, as on the
-  website.
+- **Zoom's sharing layout**: the meeting window minimizes when sharing starts and comes back when
+  it stops; a "You are screen sharing · Stop Share" pill sits at the top and opens into the full
+  toolbar (mute, video, participants, New Share, pause, annotate, chat, more) on hover; a small
+  video window shows who's talking; a green border marks the shared screen.
+- **Annotate anywhere** with Zoom's toolbar (mouse, text, pen/highlighter/line/arrow/rectangle/oval,
+  stamps, spotlight, eraser, colour and thickness, undo/redo, clear, save): when a whole screen is
+  shared, a see-through drawing layer covers it, so the teacher draws on any program. The mouse goes
+  through the layer unless a tool is picked. When one window is shared, drawing happens on its
+  picture in the meeting window.
+- **Opens from the website**: "Start LiveClass" on the site (Windows/Mac) opens a
+  `liveclass://open?url=…` link, so the meeting opens straight in the app (signed in once with the
+  app's own login). Set `REACT_APP_LIVECLASS_DOWNLOAD_URL` on the website to show a download link.
 - The bar and the drawing layer are left out of the screen capture. Students (in the browser) and
   cloud recordings get the strokes over the data channel, as with every annotation, so nothing is
   drawn twice.

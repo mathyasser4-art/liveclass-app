@@ -1,9 +1,11 @@
 // LiveClass desktop app for teachers. It loads the live website (so site updates need no reinstall)
 // and adds what a browser can't do, the way the Zoom app works:
 //  - its own share picker (screens and windows) and no browser "Stop sharing / Hide" bar,
-//  - the meeting window minimizes while sharing and the floating controls stay on top,
-//  - annotations drawn on a see-through layer over the whole shared screen.
-// The floating bar and the drawing layer are left out of the screen capture: students get the
+//  - while sharing the meeting window minimizes; the "You are screen sharing" pill/toolbar, the
+//    annotation toolbar and a small video window float on top,
+//  - annotations drawn on a see-through layer (with Zoom's green border) over the shared screen,
+//  - liveclass:// links: "Start LiveClass" on the website opens the meeting straight in the app.
+// The floating windows and the drawing layer are left out of the screen capture: students get the
 // strokes over the data channel (as they do today), so nothing is drawn twice.
 const {
     app, BrowserWindow, Menu, desktopCapturer, ipcMain, screen, session, shell, systemPreferences, webContents
@@ -18,10 +20,16 @@ const SITES = [
 ];
 // Development: `npm start -- --site=http://localhost:3007` opens any site.
 const devSite = (process.argv.find((a) => a.startsWith('--site=')) || '').slice(7);
+// Development runs get their own profile, so they work next to an installed LiveClass.
+if (devSite) app.setPath('userData', path.join(app.getPath('appData'), 'LiveClass-dev'));
 const ICON = path.join(__dirname, '..', 'assets', 'icon.png');
 const BAR = 'lc-bar';
+const ANNOT_BAR = 'lc-annotbar';
+const VIDEOS = 'lc-videos';
 const OVERLAY = 'lc-annotate';
 const MEETING = 'lc-meeting';
+const FLOATING = [BAR, ANNOT_BAR, VIDEOS];
+const PROTOCOL = 'liveclass';
 
 // ---- Settings (the chosen site) -----------------------------------------------------------------
 const settingsFile = () => path.join(app.getPath('userData'), 'settings.json');
@@ -69,6 +77,7 @@ let mainWindow = null;
 // Per meeting window (by webContents id): what was shared, and its floating bar / drawing layer.
 const shares = new Map();
 const children = new Map();
+const pendingSizes = new Map();
 const childrenOf = (id) => {
     if (!children.has(id)) children.set(id, {});
     return children.get(id);
@@ -93,7 +102,10 @@ const meetingWindowOptions = () => ({
     backgroundColor: '#1a1a1a',
     autoHideMenuBar: true,
     // The meeting keeps running at full speed while minimized during a share.
-    webPreferences: appWebPreferences({ backgroundThrottling: false })
+    webPreferences: appWebPreferences({
+        backgroundThrottling: false,
+        additionalArguments: [`--lc-version=${app.getVersion()}`, '--lc-window=meeting']
+    })
 });
 
 const sharedDisplay = (openerId) => {
@@ -102,16 +114,27 @@ const sharedDisplay = (openerId) => {
     return (share && all.find((d) => String(d.id) === String(share.displayId))) || screen.getPrimaryDisplay();
 };
 
-// The floating bar: top centre of the shared screen, above everything, not in the capture.
-const setUpBar = (win, openerId) => {
-    childrenOf(openerId).bar = win;
+// The floating windows stay above the drawing layer.
+const raiseFloating = (openerId) => {
+    const kids = childrenOf(openerId);
+    FLOATING.forEach((name) => { if (kids[name] && !kids[name].isDestroyed()) kids[name].moveTop(); });
+};
+
+// Floating windows (share pill/toolbar, annotation toolbar, videos): above everything on the shared
+// screen, not in the capture. The pill sits top centre, the pen tools under it, videos top right.
+const setUpFloating = (win, openerId, name) => {
+    childrenOf(openerId)[name] = win;
     win.setAlwaysOnTop(true, 'screen-saver');
     win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
     win.setContentProtection(true);
     const area = sharedDisplay(openerId).workArea;
     const [width] = win.getSize();
-    win.setPosition(Math.round(area.x + (area.width - width) / 2), area.y + 12);
-    win.on('closed', () => { if (childrenOf(openerId).bar === win) delete childrenOf(openerId).bar; });
+    if (name === VIDEOS) win.setPosition(area.x + area.width - width - 16, area.y + 64);
+    else win.setPosition(Math.round(area.x + (area.width - width) / 2), area.y + (name === ANNOT_BAR ? 58 : 6));
+    win.on('closed', () => { if (childrenOf(openerId)[name] === win) delete childrenOf(openerId)[name]; });
+    const pending = pendingSizes.get(`${openerId}:${name}`);
+    pendingSizes.delete(`${openerId}:${name}`);
+    if (pending) applySize(win, openerId, name, pending[0], pending[1]);
 };
 
 // The drawing layer: covers the shared screen, lets the mouse through unless drawing, never takes
@@ -124,18 +147,18 @@ const setUpOverlay = (win, openerId) => {
     win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
     win.setIgnoreMouseEvents(true);
     win.setContentProtection(true);
-    if (kids.bar && !kids.bar.isDestroyed()) kids.bar.moveTop();
+    raiseFloating(openerId);
     win.on('closed', () => { if (childrenOf(openerId).overlay === win) delete childrenOf(openerId).overlay; });
 };
 
 function wireContents(contents) {
     contents.setWindowOpenHandler(({ url, frameName }) => {
-        if (frameName === BAR && url === 'about:blank') {
+        if (FLOATING.includes(frameName) && url === 'about:blank') {
             return {
                 action: 'allow',
                 overrideBrowserWindowOptions: {
-                    frame: false, resizable: false, minimizable: false, maximizable: false, fullscreenable: false,
-                    skipTaskbar: true, backgroundColor: '#1a1a1a', title: 'LiveClass', icon: ICON
+                    frame: false, transparent: true, backgroundColor: '#00000000', hasShadow: false, resizable: false,
+                    minimizable: false, maximizable: false, fullscreenable: false, skipTaskbar: true, title: 'LiveClass', icon: ICON
                 }
             };
         }
@@ -169,7 +192,7 @@ function wireContents(contents) {
     });
 
     contents.on('did-create-window', (win, { frameName, url }) => {
-        if (frameName === BAR) return setUpBar(win, contents.id);
+        if (FLOATING.includes(frameName)) return setUpFloating(win, contents.id, frameName);
         if (frameName === OVERLAY) return setUpOverlay(win, contents.id);
         if (isOurs(url)) {
             win.lcMeeting = frameName === MEETING;
@@ -188,7 +211,7 @@ function wireContents(contents) {
     const id = contents.id;
     contents.on('destroyed', () => {
         const kids = children.get(id) || {};
-        [kids.bar, kids.overlay].forEach((w) => { if (w && !w.isDestroyed()) w.close(); });
+        [...FLOATING.map((name) => kids[name]), kids.overlay].forEach((w) => { if (w && !w.isDestroyed()) w.close(); });
         children.delete(id);
         shares.delete(id);
     });
@@ -243,9 +266,10 @@ async function pickShare(request, callback) {
     }
     const screenAccess = process.platform === 'darwin' ? systemPreferences.getMediaAccessStatus('screen') : 'granted';
 
+    // New Share is asked for while the meeting is minimized: then the picker stands on its own, on top.
+    const hidden = parent.isMinimized();
     const picker = new BrowserWindow({
-        parent,
-        modal: true,
+        ...(hidden ? { alwaysOnTop: true } : { parent, modal: true }),
         width: 860,
         height: 620,
         minWidth: 600,
@@ -332,15 +356,48 @@ ipcMain.on('lc:focus-meeting', (event) => {
     win.focus();
 });
 
+// Pages can't make their popups smaller than 100 px, so the floating windows are sized here.
+ipcMain.on('lc:float-size', (event, name, width, height) => {
+    if (!fromOurs(event) || !FLOATING.includes(name)) return;
+    const win = (children.get(event.sender.id) || {})[name];
+    // Asked before the window was set up: applied by setUpFloating.
+    if (!win || win.isDestroyed()) {
+        pendingSizes.set(`${event.sender.id}:${name}`, [width, height]);
+        return;
+    }
+    applySize(win, event.sender.id, name, width, height);
+});
+
+function applySize(win, openerId, name, width, height) {
+    const w = Math.round(Math.min(Math.max(width, 40), 1600));
+    const h = Math.round(Math.min(Math.max(height, 24), 1200));
+    // The first size also places the window (Chromium may still move a new popup after it opens).
+    if (!win.lcPlaced) {
+        win.lcPlaced = true;
+        const area = sharedDisplay(openerId).workArea;
+        const x = name === VIDEOS ? area.x + area.width - w - 16 : Math.round(area.x + (area.width - w) / 2);
+        const y = area.y + (name === VIDEOS ? 64 : name === ANNOT_BAR ? 58 : 6);
+        win.setBounds({ x, y, width: w, height: h });
+        return;
+    }
+    const old = win.getBounds();
+    const x = name === VIDEOS ? old.x + old.width - w : Math.round(old.x + (old.width - w) / 2);
+    win.setBounds({ x, y: old.y, width: w, height: h });
+}
+
 ipcMain.handle('lc:share-info', (event) => (fromOurs(event) ? shares.get(event.sender.id) || null : null));
 
-// Drawing: the layer takes the mouse; otherwise clicks go through to the shared apps.
-ipcMain.on('lc:annotating', (event, on) => {
+// Drawing ('draw'): the layer takes the mouse; typing ('text') also needs the keyboard; otherwise
+// (false) clicks go through to the shared apps.
+ipcMain.on('lc:annotating', (event, mode) => {
     if (!fromOurs(event)) return;
     const kids = children.get(event.sender.id) || {};
-    if (!kids.overlay || kids.overlay.isDestroyed()) return;
-    kids.overlay.setIgnoreMouseEvents(!on);
-    if (kids.bar && !kids.bar.isDestroyed()) kids.bar.moveTop();
+    const layer = kids.overlay;
+    if (!layer || layer.isDestroyed()) return;
+    layer.setIgnoreMouseEvents(!mode);
+    layer.setFocusable(mode === 'text');
+    if (mode === 'text') layer.focus();
+    raiseFloating(event.sender.id);
 });
 
 ipcMain.on('site:choose', (event, id) => {
@@ -350,6 +407,37 @@ ipcMain.on('site:choose', (event, id) => {
     if (mainWindow) mainWindow.loadURL(site.url);
 });
 ipcMain.handle('site:list', () => ({ sites: SITES, current: readSettings().site || '' }));
+
+// ---- liveclass:// links ------------------------------------------------------------------------
+// liveclass://open?url=<https://satarea.tech/live/<courseId>>, from "Start LiveClass" on the website:
+// the meeting opens in its own window (signed in with the app's own login).
+const linkFrom = (argv) => (argv || []).find((a) => typeof a === 'string' && a.startsWith(`${PROTOCOL}://`));
+let pendingLink = linkFrom(process.argv);
+
+function openLink(link) {
+    let target;
+    try {
+        target = new URL(link).searchParams.get('url');
+    } catch (e) {
+        return;
+    }
+    if (!target || !isOurs(target)) return;
+    // The first link also picks the site for the main window.
+    const site = SITES.find((s) => new URL(s.url).origin === new URL(target).origin);
+    if (site && !readSettings().site) writeSettings({ ...readSettings(), site: site.id });
+    const existing = BrowserWindow.getAllWindows().find((w) => w.lcMeeting && !w.isDestroyed());
+    if (existing) {
+        if (existing.webContents.getURL() !== target) existing.loadURL(target);
+        if (existing.isMinimized()) existing.restore();
+        existing.focus();
+        return;
+    }
+    const win = new BrowserWindow(meetingWindowOptions());
+    win.lcMeeting = true;
+    win.setMenuBarVisibility(false);
+    wireContents(win.webContents);
+    win.loadURL(target);
+}
 
 // ---- App ----------------------------------------------------------------------------------------
 function buildMenu() {
@@ -374,7 +462,19 @@ function buildMenu() {
 if (!app.requestSingleInstanceLock()) {
     app.quit();
 } else {
-    app.on('second-instance', () => {
+    // Windows: links start the app with the link as an argument (or reach the running app here).
+    // Development runs leave the link to the installed app (pass a link on the command line instead).
+    if (app.isPackaged) app.setAsDefaultProtocolClient(PROTOCOL);
+    // macOS: links arrive as an event.
+    app.on('open-url', (event, link) => {
+        event.preventDefault();
+        if (app.isReady()) openLink(link);
+        else pendingLink = link;
+    });
+
+    app.on('second-instance', (event, argv) => {
+        const link = linkFrom(argv);
+        if (link) return openLink(link);
         if (!mainWindow) return createMainWindow();
         if (mainWindow.isMinimized()) mainWindow.restore();
         return mainWindow.focus();
@@ -395,7 +495,10 @@ if (!app.requestSingleInstanceLock()) {
         ses.setDisplayMediaRequestHandler(pickShare);
 
         buildMenu();
-        createMainWindow();
+        // Opened from a link: just the meeting, like Zoom (the main window opens when asked for).
+        if (pendingLink) openLink(pendingLink);
+        else createMainWindow();
+        pendingLink = null;
         app.on('activate', () => { if (!mainWindow) createMainWindow(); });
     });
 
