@@ -149,6 +149,9 @@ const raiseFloating = (openerId) => {
 // screen, not in the capture. The pill sits top centre, the pen tools under it, videos top right.
 const setUpFloating = (win, openerId, name) => {
     childrenOf(openerId)[name] = win;
+    // Whether the page wants it on screen (the pen bar and the toolbar open hidden); keepControls
+    // brings back a window that should show and doesn't.
+    win.lcWantShown = name !== ANNOT_BAR && name !== BAR_TOOLS;
     win.setAlwaysOnTop(true, 'screen-saver');
     win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
     win.setContentProtection(true);
@@ -550,19 +553,17 @@ const pickers = new Map();
 async function pickShare(request, callback) {
     const contents = request.frame && webContents.fromFrame(request.frame);
     const parent = contents && BrowserWindow.fromWebContents(contents);
-    // One picker per meeting window at a time.
-    if (!contents || !parent || !isOurs(request.frame.url) || picking.has(contents.id)) return callback({});
+    if (!contents || !parent || !isOurs(request.frame.url)) return callback({});
+    // One picker per meeting window at a time: another click on Share brings the open one forward.
+    if (picking.has(contents.id)) {
+        const open = BrowserWindow.getAllWindows().find((w) => w.lcPickerFor === contents.id && !w.isDestroyed());
+        if (open && open.isVisible()) open.focus();
+        return callback({});
+    }
     picking.add(contents.id);
 
-    // Our own windows (meeting, bar, drawing layer) are never offered.
-    const ours = new Set(BrowserWindow.getAllWindows().map((w) => w.getMediaSourceId()));
+    // Zoom's share dialog opens at once: the list fills in as Windows finds the screens and windows.
     let sources = [];
-    try {
-        sources = (await desktopCapturer.getSources({ types: ['screen', 'window'], thumbnailSize: { width: 400, height: 225 }, fetchWindowIcons: true }))
-            .filter((s) => !ours.has(s.id));
-    } catch (e) {
-        sources = [];
-    }
     const screenAccess = process.platform === 'darwin' ? systemPreferences.getMediaAccessStatus('screen') : 'granted';
 
     // New Share is asked for while the meeting is minimized: then the picker stands on its own, on top.
@@ -584,6 +585,7 @@ async function pickShare(request, callback) {
         show: false,
         webPreferences: { preload: path.join(__dirname, 'local-preload.js'), contextIsolation: true, sandbox: true }
     });
+    picker.lcPickerFor = contents.id;
     picker.setMenuBarVisibility(false);
     // New Share opens it over the screen being shared: students must not see it, and it stands above
     // the floating windows (an open Participants or Chat window must not cover it).
@@ -627,23 +629,50 @@ async function pickShare(request, callback) {
         answer({});
     });
 
-    const lang = await pageLanguage(contents);
-    picker.webContents.once('did-finish-load', () => {
+    let lang = 'en';
+    let loaded = false;
+    let loading = true;
+    const push = () => {
+        if (!loaded || picker.isDestroyed()) return;
         picker.webContents.send('picker:sources', {
             lang,
             platform: process.platform,
             screenAccess,
+            loading,
             sources: sources.map((s) => ({
                 id: s.id,
                 name: s.name,
                 type: s.id.startsWith('screen:') ? 'screen' : 'window',
-                thumbnail: s.thumbnail.isEmpty() ? '' : s.thumbnail.toDataURL(),
+                thumbnail: s.thumbnail && !s.thumbnail.isEmpty() ? s.thumbnail.toDataURL() : '',
                 icon: s.appIcon && !s.appIcon.isEmpty() ? s.appIcon.toDataURL() : ''
             }))
         });
-        picker.show();
+    };
+    picker.webContents.once('did-finish-load', async () => {
+        lang = await pageLanguage(contents).catch(() => 'en');
+        loaded = true;
+        push();
+        if (!picker.isDestroyed()) picker.show();
     });
     picker.loadFile(path.join(__dirname, 'picker.html'));
+
+    // Our own windows (meeting, bar, drawing layer, this picker) are never offered. First the names
+    // (quick), then the pictures (slow with many windows open).
+    const ours = new Set(BrowserWindow.getAllWindows().map((w) => w.getMediaSourceId()));
+    const find = (options) => desktopCapturer.getSources({ types: ['screen', 'window'], ...options })
+        .then((list) => list.filter((s) => !ours.has(s.id)))
+        .catch(() => null);
+    const quick = await find({ thumbnailSize: { width: 0, height: 0 }, fetchWindowIcons: false });
+    if (answered || picker.isDestroyed()) return undefined;
+    if (quick) {
+        sources = quick;
+        push();
+    }
+    const full = await find({ thumbnailSize: { width: 400, height: 225 }, fetchWindowIcons: true });
+    if (answered || picker.isDestroyed()) return undefined;
+    if (full) sources = full;
+    loading = false;
+    push();
     return undefined;
 }
 
@@ -855,6 +884,66 @@ ipcMain.on('lc:sharing', (event, on) => {
     updateBorder(event.sender.id);
 });
 
+// ---- The share controls never go missing ---------------------------------------------------------
+// Like Zoom's, the Stop Share pill (and the other controls the page has up) stays on screen for the
+// whole share. Windows can still take them away: "Show desktop" (Win+D), a full-screen app, a screen
+// unplugged or rearranged. Every moment while sharing, anything the page wants shown and isn't comes
+// back, on top, and anything left outside every screen goes back to where it first appeared.
+const KEEP_MS = 1500;
+let keepTimer = null;
+const onSomeScreen = (b) => screen.getAllDisplays().some(({ workArea: a }) => b.x < a.x + a.width - 20
+    && b.x + b.width > a.x + 20 && b.y < a.y + a.height - 10 && b.y + b.height > a.y + 10);
+
+function keepControls() {
+    sharingPages.forEach((openerId) => {
+        const kids = children.get(openerId);
+        if (!kids) return;
+        let raise = false;
+        // The drawing layer owns the toolbars: while it is down they are down with it.
+        const layer = kids.overlay;
+        if (live(layer) && (layer.isMinimized() || !layer.isVisible())) {
+            if (layer.isMinimized()) layer.restore();
+            layer.showInactive();
+            raise = true;
+        }
+        FLOATING.forEach((name) => {
+            const w = kids[name];
+            if (!live(w) || !w.lcWantShown || w.lcDrag) return;
+            if (w.isMinimized() || !w.isVisible()) {
+                if (w.isMinimized()) w.restore();
+                w.showInactive();
+                raise = true;
+            }
+            if (!w.isAlwaysOnTop()) raise = true;
+            if (name === BAR && !onSomeScreen(w.getBounds())) {
+                const [width, height] = sizeOf(w);
+                w.lcDock = '';
+                w.lcMoved = false;
+                const home = homeBounds(openerId, BAR, width, height, w.lcAnchor);
+                w.lcCenter = home.x + anchorMid(w.lcAnchor, width);
+                setBoundsQuietly(w, home);
+                placeTools(openerId);
+                const opener = webContents.fromId(openerId);
+                if (opener && !opener.isDestroyed()) opener.send('lc:dock', { name: BAR, side: '' });
+            } else if (name !== BAR && name !== BAR_TOOLS && !onSomeScreen(w.getBounds())) {
+                const [width, height] = sizeOf(w);
+                w.lcMoved = false;
+                setBoundsQuietly(w, homeBounds(openerId, name, width, height, w.lcAnchor));
+                if (PANELS.includes(name) || name === VIDEOS) layoutRight(openerId);
+            }
+        });
+        if (raise) {
+            attachToLayer(openerId);
+            raiseFloating(openerId);
+        }
+    });
+}
+
+function watchControls(on) {
+    clearInterval(keepTimer);
+    keepTimer = on ? setInterval(keepControls, KEEP_MS) : null;
+}
+
 // Zoom's "Hide floating meeting controls" comes back with Ctrl+Alt+Shift+H; the shortcut belongs to
 // LiveClass only while a share is on.
 const CONTROLS_SHORTCUT = 'Control+Alt+Shift+H';
@@ -865,6 +954,7 @@ function setSharingShortcut(id, on) {
     else sharingPages.delete(id);
     const has = sharingPages.size > 0;
     if (had === has || !app.isReady()) return;
+    watchControls(has);
     if (!has) {
         if (globalShortcut.isRegistered(CONTROLS_SHORTCUT)) globalShortcut.unregister(CONTROLS_SHORTCUT);
         return;
@@ -990,6 +1080,7 @@ ipcMain.on('lc:float-visible', (event, name, visible) => {
     if (!fromOurs(event) || !FLOATING.includes(name)) return;
     const win = (children.get(event.sender.id) || {})[name];
     if (!win || win.isDestroyed()) return;
+    win.lcWantShown = !!visible;
     if (!visible) {
         stopDrag(win);
         return win.hide();

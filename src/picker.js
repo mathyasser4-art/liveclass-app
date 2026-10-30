@@ -10,6 +10,7 @@ const TEXT = {
         cancel: 'Cancel',
         share: 'Share',
         empty: 'Nothing to share here.',
+        loading: 'Finding your screens and windows…',
         macAccess: 'Allow LiveClass in System Settings → Privacy & Security → Screen Recording, then reopen the app.'
     },
     ar: {
@@ -22,12 +23,14 @@ const TEXT = {
         cancel: 'إلغاء',
         share: 'مشاركة',
         empty: 'لا يوجد شيء للمشاركة هنا.',
+        loading: 'جارٍ البحث عن الشاشات والنوافذ…',
         macAccess: 'اسمح لـ LiveClass من إعدادات النظام ← الخصوصية والأمان ← تسجيل الشاشة، ثم أعد فتح التطبيق.'
     }
 };
 
 const $ = (id) => document.getElementById(id);
 let sources = [];
+let loading = true;
 let tab = 'screen';
 let selected = '';
 let t = TEXT.en;
@@ -42,7 +45,7 @@ const render = () => {
     if (!list.length) {
         const empty = document.createElement('div');
         empty.className = 'empty';
-        empty.textContent = t.empty;
+        empty.textContent = loading ? t.loading : t.empty;
         grid.appendChild(empty);
     }
     list.forEach((s, i) => {
@@ -93,9 +96,12 @@ window.lcApp.onSources((data) => {
         $('note').hidden = false;
         $('note').textContent = t.macAccess;
     }
+    // The list comes more than once (names first, then pictures): the choice made so far stays.
     sources = data.sources;
+    loading = !!data.loading;
+    if (selected && !sources.some((s) => s.id === selected)) selected = '';
     const screens = sources.filter((s) => s.type === 'screen');
-    if (screens.length === 1) selected = screens[0].id;
+    if (!selected && screens.length === 1) selected = screens[0].id;
     $('share').disabled = !selected;
     render();
 });
