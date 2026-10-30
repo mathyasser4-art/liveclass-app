@@ -62,6 +62,10 @@
           ]
         }
       ],
+      "files": [
+        "!node_modules/koffi{,/**/*}",
+        "!node_modules/@koromix{,/**/*}"
+      ],
       "category": "public.app-category.education",
       "artifactName": "LiveClass-${version}.${ext}",
       "extendInfo": {
