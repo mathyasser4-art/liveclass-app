@@ -185,10 +185,12 @@ function decideDock(win, openerId, name, dropped) {
 const anchorMid = (anchor, width) => (anchor ? anchor.x + anchor.width / 2 : width / 2);
 const barCentre = (win, b) => b.x + anchorMid(win.lcAnchor, b.width);
 
-// Where each floating window first appears (DIP). Nothing overlaps, even with the share toolbar open
-// (about 112 px tall): pill top centre, pen bar under it, preview on the right below both.
-const PEN_BAR_TOP = 132;
-const VIDEOS_TOP = 214;
+// Where each floating window first appears (DIP): pill top centre, pen bar under it, preview on the
+// right below both. Nothing overlaps even with the toolbar out under the pill and a notice under it
+// (pill 6 + 38, toolbar from 46, about 57 + 41 tall, so down to about 144): the toolbar window is
+// raised last, and it must not lie over the pen bar's buttons.
+const PEN_BAR_TOP = 160;
+const VIDEOS_TOP = 242;
 const homeBounds = (openerId, name, w, h, anchor) => {
     const area = sharedDisplay(openerId).workArea;
     if (name === VIDEOS) return { x: area.x + area.width - w - 16, y: area.y + VIDEOS_TOP, width: w, height: h };
