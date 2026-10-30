@@ -8,7 +8,7 @@
 // The floating windows and the drawing layer are left out of the screen capture: students get the
 // strokes over the data channel (as they do today), so nothing is drawn twice.
 const {
-    app, BrowserWindow, Menu, desktopCapturer, ipcMain, screen, session, shell, systemPreferences, webContents
+    app, BrowserWindow, Menu, desktopCapturer, globalShortcut, ipcMain, screen, session, shell, systemPreferences, webContents
 } = require('electron');
 const path = require('path');
 const fs = require('fs');
@@ -27,11 +27,14 @@ if (devSite) app.setPath('userData', path.join(app.getPath('appData'), 'LiveClas
 app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion');
 const ICON = path.join(__dirname, '..', 'assets', 'icon.png');
 const BAR = 'lc-bar';
+// The share toolbar: its own window under the pill, shown while the pill or it is hovered, so the
+// pill itself never resizes (resizing a window under the mouse made it twitch).
+const BAR_TOOLS = 'lc-bartools';
 const ANNOT_BAR = 'lc-annotbar';
 const VIDEOS = 'lc-videos';
 const OVERLAY = 'lc-annotate';
 const MEETING = 'lc-meeting';
-const FLOATING = [BAR, ANNOT_BAR, VIDEOS];
+const FLOATING = [BAR, BAR_TOOLS, ANNOT_BAR, VIDEOS];
 const PROTOCOL = 'liveclass';
 
 // ---- Settings (the chosen site) -----------------------------------------------------------------
@@ -120,7 +123,7 @@ const sharedDisplay = (openerId) => {
 // The floating windows stay above the drawing layer.
 const raiseFloating = (openerId) => {
     const kids = childrenOf(openerId);
-    [ANNOT_BAR, VIDEOS, BAR].forEach((name) => {
+    [ANNOT_BAR, VIDEOS, BAR, BAR_TOOLS].forEach((name) => {
         const w = kids[name];
         // Re-asserting "topmost" moves a window to the top of that band without moving, sizing or
         // showing it (moveTop would re-show the hidden pen bar). The share toolbar goes last: when it
@@ -137,49 +140,88 @@ const setUpFloating = (win, openerId, name) => {
     win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
     win.setContentProtection(true);
     const [width, height] = win.getSize();
-    setBoundsQuietly(win, homeBounds(openerId, name, width, height));
-    win.on('closed', () => { if (childrenOf(openerId)[name] === win) delete childrenOf(openerId)[name]; });
-    if (name !== VIDEOS) {
-        // Only the teacher's own drags dock or undock a toolbar (our resizes move it too); decided once
-        // the window stops moving.
+    if (name === BAR_TOOLS) placeTools(openerId, width, height);
+    else setBoundsQuietly(win, homeBounds(openerId, name, width, height));
+    win.on('closed', () => {
+        stopDrag(win);
+        if (childrenOf(openerId)[name] === win) delete childrenOf(openerId)[name];
+    });
+    if (name !== VIDEOS && name !== BAR_TOOLS) {
+        // Pages from before the page-driven drag move the toolbars by drag regions: only the teacher's
+        // own drags dock or undock them (our resizes and drags move them too), once the window stops.
         let settle = null;
         win.on('move', () => {
-            if (win.lcResizing) return;
+            if (win.lcResizing || win.lcDrag) return;
             // Where the teacher put it, right away (a resize during or just after the drag keeps it).
             const dropped = win.getBounds();
-            win.lcCenter = dropped.x + dropped.width / 2;
+            win.lcCenter = barCentre(win, dropped);
             clearTimeout(settle);
-            settle = setTimeout(() => {
-                if (win.isDestroyed()) return;
-                const side = dockSide(dropped);
-                if (side === (win.lcDock || '')) return;
-                win.lcDock = side;
-                const opener = webContents.fromId(openerId);
-                if (opener && !opener.isDestroyed()) opener.send('lc:dock', { name, side });
-                // A share toolbar docking where the pen bar already is pushes the pen bar under it.
-                const pen = childrenOf(openerId)[ANNOT_BAR];
-                if (name === BAR && side && pen && !pen.isDestroyed() && pen.lcDock === side) {
-                    const [pw, ph] = pen.getSize();
-                    setTimeout(() => { if (!pen.isDestroyed()) applySize(pen, openerId, ANNOT_BAR, pw, ph); }, 400);
-                }
-            }, 300);
+            settle = setTimeout(() => { if (!win.isDestroyed()) decideDock(win, openerId, name, dropped); }, 300);
         });
     }
     const pending = pendingSizes.get(`${openerId}:${name}`);
     pendingSizes.delete(`${openerId}:${name}`);
-    if (pending) applySize(win, openerId, name, pending[0], pending[1]);
+    if (pending) applySize(win, openerId, name, ...pending);
     attachToLayer(openerId);
 };
+
+// A toolbar dropped at the left or right screen edge docks there (the page turns it vertical).
+function decideDock(win, openerId, name, dropped) {
+    const side = dockSide(dropped);
+    if (side === (win.lcDock || '')) return;
+    win.lcDock = side;
+    const opener = webContents.fromId(openerId);
+    if (opener && !opener.isDestroyed()) opener.send('lc:dock', { name, side });
+    // A share toolbar docking where the pen bar already is pushes the pen bar under it.
+    const pen = childrenOf(openerId)[ANNOT_BAR];
+    if (name === BAR && side && pen && !pen.isDestroyed() && pen.lcDock === side) {
+        const [pw, ph] = pen.getSize();
+        setTimeout(() => { if (!pen.isDestroyed()) applySize(pen, openerId, ANNOT_BAR, pw, ph); }, 400);
+    }
+}
+
+// The page says where its bar sits inside the window (anchor: { x, y, width }): a menu sticking out
+// to one side grows the window that way while the bar itself stays put.
+const anchorMid = (anchor, width) => (anchor ? anchor.x + anchor.width / 2 : width / 2);
+const barCentre = (win, b) => b.x + anchorMid(win.lcAnchor, b.width);
 
 // Where each floating window first appears (DIP). Nothing overlaps, even with the share toolbar open
 // (about 112 px tall): pill top centre, pen bar under it, preview on the right below both.
 const PEN_BAR_TOP = 132;
 const VIDEOS_TOP = 214;
-const homeBounds = (openerId, name, w, h) => {
+const homeBounds = (openerId, name, w, h, anchor) => {
     const area = sharedDisplay(openerId).workArea;
     if (name === VIDEOS) return { x: area.x + area.width - w - 16, y: area.y + VIDEOS_TOP, width: w, height: h };
-    return { x: Math.round(area.x + (area.width - w) / 2), y: area.y + (name === ANNOT_BAR ? PEN_BAR_TOP : 6), width: w, height: h };
+    return {
+        x: Math.round(area.x + area.width / 2 - anchorMid(anchor, w)),
+        y: area.y + (name === ANNOT_BAR ? PEN_BAR_TOP : 6) - (anchor ? anchor.y : 0),
+        width: w,
+        height: h
+    };
 };
+
+// The share toolbar hangs centred just under the pill (above it when the pill is at the bottom).
+function placeTools(openerId, width, height) {
+    const kids = childrenOf(openerId);
+    const bar = kids[BAR];
+    const tools = kids[BAR_TOOLS];
+    if (!tools || tools.isDestroyed()) return;
+    const [w, h] = width ? [width, height] : tools.getSize();
+    // No pill yet: just the size (the pill places the toolbar once it is set up).
+    if (!bar || bar.isDestroyed()) {
+        const t = tools.getBounds();
+        setBoundsQuietly(tools, { x: t.x, y: t.y, width: w, height: h });
+        return;
+    }
+    const b = bar.getBounds();
+    const area = screen.getDisplayMatching(b).workArea;
+    const anchor = tools.lcAnchor;
+    let x = Math.round(barCentre(bar, b) - anchorMid(anchor, w));
+    x = Math.max(area.x, Math.min(x, area.x + area.width - w));
+    let y = b.y + b.height + 2 - (anchor ? anchor.y : 0);
+    if (y + h > area.y + area.height) y = Math.max(area.y, b.y - h - 2);
+    setBoundsQuietly(tools, { x, y, width: w, height: h });
+}
 
 // Our own resizes must not count as the teacher moving a toolbar.
 const setBoundsQuietly = (win, bounds) => {
@@ -251,7 +293,8 @@ function wireContents(contents) {
                     frame: false, transparent: true, backgroundColor: '#00000000', hasShadow: false, resizable: false,
                     minimizable: false, maximizable: false, fullscreenable: false, skipTaskbar: true, title: 'LiveClass', icon: ICON,
                     focusable: false,
-                    show: frameName !== ANNOT_BAR,
+                    // The pen bar and the share toolbar open hidden; the page shows them when needed.
+                    show: frameName !== ANNOT_BAR && frameName !== BAR_TOOLS,
                     webPreferences: { backgroundThrottling: false }
                 }
             };
@@ -309,6 +352,7 @@ function wireContents(contents) {
         [...FLOATING.map((name) => kids[name]), kids.overlay].forEach((w) => { if (w && !w.isDestroyed()) w.close(); });
         children.delete(id);
         shares.delete(id);
+        setSharingShortcut(id, false);
     };
     contents.on('destroyed', closeKids);
     // A reload or another page: the old page's share windows go with it.
@@ -438,6 +482,7 @@ ipcMain.on('lc:sharing', (event, on) => {
     if (!fromOurs(event)) return;
     const win = BrowserWindow.fromWebContents(event.sender);
     if (!win) return;
+    setSharingShortcut(event.sender.id, !!on);
     if (on) {
         if (!win.isMinimized()) win.minimize();
     } else {
@@ -446,6 +491,32 @@ ipcMain.on('lc:sharing', (event, on) => {
         win.focus();
     }
 });
+
+// Zoom's "Hide floating meeting controls" comes back with Ctrl+Alt+Shift+H; the shortcut belongs to
+// LiveClass only while a share is on.
+const CONTROLS_SHORTCUT = 'Control+Alt+Shift+H';
+const sharingPages = new Set();
+function setSharingShortcut(id, on) {
+    const had = sharingPages.size > 0;
+    if (on) sharingPages.add(id);
+    else sharingPages.delete(id);
+    const has = sharingPages.size > 0;
+    if (had === has || !app.isReady()) return;
+    if (!has) {
+        if (globalShortcut.isRegistered(CONTROLS_SHORTCUT)) globalShortcut.unregister(CONTROLS_SHORTCUT);
+        return;
+    }
+    try {
+        globalShortcut.register(CONTROLS_SHORTCUT, () => {
+            sharingPages.forEach((pageId) => {
+                const page = webContents.fromId(pageId);
+                if (page && !page.isDestroyed()) page.send('lc:toggle-controls');
+            });
+        });
+    } catch (e) {
+        // Another app owns the shortcut; the controls come back when the share ends.
+    }
+}
 
 ipcMain.on('lc:focus-meeting', (event) => {
     if (!fromOurs(event)) return;
@@ -457,39 +528,59 @@ ipcMain.on('lc:focus-meeting', (event) => {
 });
 
 // Pages can't make their popups smaller than 100 px, so the floating windows are sized here.
-ipcMain.on('lc:float-size', (event, name, width, height) => {
-    if (!fromOurs(event) || !FLOATING.includes(name)) return;
+const cleanAnchor = (a) => {
+    if (!a || typeof a !== 'object' || ![a.x, a.y, a.width].every(Number.isFinite)) return undefined;
+    return { x: Math.max(0, a.x), y: Math.max(0, a.y), width: Math.max(0, a.width) };
+};
+
+ipcMain.on('lc:float-size', (event, name, width, height, anchor) => {
+    if (!fromOurs(event) || !FLOATING.includes(name) || !Number.isFinite(width) || !Number.isFinite(height)) return;
     const win = (children.get(event.sender.id) || {})[name];
     // Asked before the window was set up: applied by setUpFloating.
     if (!win || win.isDestroyed()) {
-        pendingSizes.set(`${event.sender.id}:${name}`, [width, height]);
+        pendingSizes.set(`${event.sender.id}:${name}`, [width, height, cleanAnchor(anchor)]);
         return;
     }
-    applySize(win, event.sender.id, name, width, height);
+    applySize(win, event.sender.id, name, width, height, cleanAnchor(anchor));
 });
 
-function applySize(win, openerId, name, width, height) {
+function applySize(win, openerId, name, width, height, anchor = win.lcAnchor) {
     const w = Math.round(Math.min(Math.max(width, 40), 1600));
     const h = Math.round(Math.min(Math.max(height, 24), 1200));
+    const before = win.lcAnchor;
+    win.lcAnchor = anchor;
+    if (name === BAR_TOOLS) {
+        win.lcPlaced = true;
+        placeTools(openerId, w, h);
+        return;
+    }
     // The first size also places the window (Chromium may still move a new popup after it opens).
     if (!win.lcPlaced) {
         win.lcPlaced = true;
-        const home = homeBounds(openerId, name, w, h);
-        win.lcCenter = home.x + w / 2;
+        const home = homeBounds(openerId, name, w, h, anchor);
+        win.lcCenter = home.x + anchorMid(anchor, w);
         setBoundsQuietly(win, home);
+        if (name === BAR) placeTools(openerId);
         return;
     }
     const old = win.getBounds();
+    // While it is being dragged the window just takes its new size; the drag keeps placing it.
+    if (win.lcDrag) {
+        setBoundsQuietly(win, { x: old.x, y: old.y, width: w, height: h });
+        return;
+    }
     const area = screen.getDisplayMatching(old).workArea;
     // Docked toolbars hug their edge (and grow away from it); the preview keeps its right edge; the
-    // others keep their centre, so opening and folding the toolbar never shifts the pill.
+    // others keep the centre of their bar, so a menu or a longer label never shifts the bar.
     let x;
-    if (win.lcDock === 'left') x = area.x + 4;
-    else if (win.lcDock === 'right') x = area.x + area.width - w - 4;
+    if (win.lcDock === 'left') x = area.x + 4 - (anchor ? anchor.x : 0);
+    else if (win.lcDock === 'right') x = area.x + area.width - 4 - (anchor ? anchor.x + anchor.width : w);
     else if (name === VIDEOS) x = old.x + old.width - w;
-    else x = Math.round((typeof win.lcCenter === 'number' ? win.lcCenter : old.x + old.width / 2) - w / 2);
+    else x = Math.round((typeof win.lcCenter === 'number' ? win.lcCenter : old.x + anchorMid(before, old.width)) - anchorMid(anchor, w));
     x = Math.max(area.x, Math.min(x, area.x + area.width - w));
-    let y = Math.max(area.y, Math.min(old.y, area.y + area.height - h));
+    // The bar keeps its height on screen too (content above it grows the window upwards).
+    const top = old.y + (before ? before.y : 0) - (anchor ? anchor.y : 0);
+    let y = Math.max(area.y, Math.min(top, area.y + area.height - h));
     // Both toolbars docked on the same side: the pen bar goes under the share toolbar.
     if (name === ANNOT_BAR && win.lcDock) {
         const bar = childrenOf(openerId)[BAR];
@@ -499,15 +590,92 @@ function applySize(win, openerId, name, width, height) {
         }
     }
     setBoundsQuietly(win, { x, y, width: w, height: h });
+    if (name === BAR) placeTools(openerId);
 }
 
 ipcMain.on('lc:float-visible', (event, name, visible) => {
     if (!fromOurs(event) || !FLOATING.includes(name)) return;
     const win = (children.get(event.sender.id) || {})[name];
     if (!win || win.isDestroyed()) return;
-    if (!visible) return win.hide();
+    if (!visible) {
+        stopDrag(win);
+        return win.hide();
+    }
+    if (name === BAR_TOOLS) placeTools(event.sender.id);
     win.showInactive();
     return raiseFloating(event.sender.id);
+});
+
+// ---- Moving the floating windows ----------------------------------------------------------------
+// Drag regions take the mouse away from the page (no hover, no cursor, and the pill folded when the
+// mouse reached its grip), so the page starts and ends a drag and the window follows the cursor here,
+// held at the point it was grabbed. Dragging the share toolbar moves the pill (the toolbar follows).
+const DRAG_TICK = 16;
+// The page ends every drag (pointer up or capture lost); this only guards against a lost message.
+const DRAG_LIMIT = 60000;
+
+function stopDrag(win) {
+    if (!win.lcDrag) return false;
+    clearInterval(win.lcDrag);
+    win.lcDrag = null;
+    return true;
+}
+
+function startDrag(win, openerId, name, offsetX, offsetY) {
+    stopDrag(win);
+    const started = Date.now();
+    win.lcDrag = setInterval(() => {
+        if (win.isDestroyed()) return;
+        if (Date.now() - started > DRAG_LIMIT) {
+            endDrag(win, openerId, name);
+            return;
+        }
+        const point = screen.getCursorScreenPoint();
+        const b = win.getBounds();
+        const x = Math.round(point.x - offsetX);
+        const y = Math.round(point.y - offsetY);
+        if (x === b.x && y === b.y) return;
+        setBoundsQuietly(win, { x, y, width: b.width, height: b.height });
+        if (name === BAR) placeTools(openerId);
+    }, DRAG_TICK);
+}
+
+function endDrag(win, openerId, name) {
+    if (win.isDestroyed() || !stopDrag(win)) return;
+    // Dropped partly off the screen: back inside the work area.
+    const b = win.getBounds();
+    const area = screen.getDisplayMatching(b).workArea;
+    const x = Math.max(area.x, Math.min(b.x, area.x + area.width - b.width));
+    const y = Math.max(area.y, Math.min(b.y, area.y + area.height - b.height));
+    const dropped = { x, y, width: b.width, height: b.height };
+    if (x !== b.x || y !== b.y) setBoundsQuietly(win, dropped);
+    win.lcCenter = barCentre(win, dropped);
+    if (name !== VIDEOS) decideDock(win, openerId, name, dropped);
+    if (name === BAR) placeTools(openerId);
+}
+
+ipcMain.on('lc:float-drag', (event, drag) => {
+    if (!fromOurs(event) || !drag || !FLOATING.includes(drag.name)) return;
+    const openerId = event.sender.id;
+    const kids = children.get(openerId) || {};
+    const name = drag.name === BAR_TOOLS ? BAR : drag.name;
+    const win = kids[name];
+    if (!win || win.isDestroyed()) return;
+    if (drag.phase !== 'start') {
+        endDrag(win, openerId, name);
+        return;
+    }
+    let offsetX = Number(drag.offsetX) || 0;
+    let offsetY = Number(drag.offsetY) || 0;
+    // Grabbed on the toolbar: the same grab point, measured from the pill.
+    const tools = kids[BAR_TOOLS];
+    if (drag.name === BAR_TOOLS && tools && !tools.isDestroyed()) {
+        const t = tools.getBounds();
+        const b = win.getBounds();
+        offsetX += t.x - b.x;
+        offsetY += t.y - b.y;
+    }
+    startDrag(win, openerId, name, offsetX, offsetY);
 });
 
 ipcMain.handle('lc:share-info', (event) => (fromOurs(event) ? shares.get(event.sender.id) || null : null));
@@ -632,6 +800,8 @@ if (!app.requestSingleInstanceLock()) {
         pendingLink = null;
         app.on('activate', () => { if (!mainWindow) createMainWindow(); });
     });
+
+    app.on('will-quit', () => globalShortcut.unregisterAll());
 
     app.on('window-all-closed', () => {
         if (process.platform !== 'darwin') app.quit();

@@ -20,14 +20,30 @@ contextBridge.exposeInMainWorld('satDesktop', {
     // The drawing layer over the shared screen takes the mouse only while drawing ('draw'), and the
     // keyboard too for the text tool ('text').
     setAnnotating: (mode) => ipcRenderer.send('lc:annotating', mode === 'text' || mode === 'draw' ? mode : false),
-    // Sizes a floating window ('lc-bar', 'lc-annotbar', 'lc-videos'); the pill and pen bar stay centred.
-    setFloatingSize: (name, width, height) => ipcRenderer.send('lc:float-size', String(name), Number(width), Number(height)),
+    // Sizes a floating window ('lc-bar', 'lc-bartools', 'lc-annotbar', 'lc-videos'). anchor ({ x, y, width }):
+    // where its bar sits inside it, so the bar stays put when a menu grows the window.
+    setFloatingSize: (name, width, height, anchor) => ipcRenderer.send(
+        'lc:float-size', String(name), Number(width), Number(height),
+        anchor ? { x: Number(anchor.x), y: Number(anchor.y), width: Number(anchor.width) } : undefined
+    ),
     setFloatingVisible: (name, visible) => ipcRenderer.send('lc:float-visible', String(name), !!visible),
+    // Moves a floating window with the mouse from the point it was grabbed (offset inside the window)
+    // until endDrag; dragging 'lc-bartools' moves the pill.
+    startDrag: (name, offsetX, offsetY) => ipcRenderer.send('lc:float-drag', {
+        name: String(name), phase: 'start', offsetX: Number(offsetX), offsetY: Number(offsetY)
+    }),
+    endDrag: (name) => ipcRenderer.send('lc:float-drag', { name: String(name), phase: 'end' }),
     // A toolbar was dropped at a screen edge ('left' / 'right') or away from it (''); returns an unsubscribe.
     onDock: (fn) => {
         const listener = (event, dock) => fn(dock);
         ipcRenderer.on('lc:dock', listener);
         return () => ipcRenderer.removeListener('lc:dock', listener);
+    },
+    // Ctrl+Alt+Shift+H while sharing: hide or show the floating meeting controls; returns an unsubscribe.
+    onToggleControls: (fn) => {
+        const listener = () => fn();
+        ipcRenderer.on('lc:toggle-controls', listener);
+        return () => ipcRenderer.removeListener('lc:toggle-controls', listener);
     }
 });
 
