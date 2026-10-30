@@ -468,6 +468,7 @@ function wireContents(contents) {
             win.lcMeeting = frameName === MEETING;
             win.setMenuBarVisibility(false);
             wireContents(win.webContents);
+            wireWindowState(win);
         }
         return undefined;
     });
@@ -481,7 +482,7 @@ function wireContents(contents) {
     const id = contents.id;
     const closeKids = () => {
         const kids = children.get(id) || {};
-        [...FLOATING.map((name) => kids[name]), kids.overlay].forEach((w) => { if (w && !w.isDestroyed()) w.close(); });
+        [...FLOATING.map((name) => kids[name]), kids.overlay, pickers.get(id)].forEach((w) => { if (w && !w.isDestroyed()) w.close(); });
         children.delete(id);
         shares.delete(id);
         stopBorder(id);
@@ -496,6 +497,16 @@ function wireContents(contents) {
         setSharingShortcut(id, false);
     };
     contents.on('destroyed', closeKids);
+    // A crashed page takes its share windows' pages with it: their empty see-through windows (and the
+    // drawing layer) would go on taking the mouse over the screen. The meeting window comes back up.
+    contents.on('render-process-gone', () => {
+        closeKids();
+        const win = BrowserWindow.fromWebContents(contents);
+        if (!win || win.isDestroyed()) return;
+        if (win.isMinimized()) win.restore();
+        win.show();
+        win.focus();
+    });
     // A reload or another page: the old page's share windows go with it.
     contents.on('did-start-navigation', (details) => {
         if (details && details.isMainFrame && !details.isSameDocument) closeKids();
@@ -556,6 +567,8 @@ async function pickShare(request, callback) {
 
     // New Share is asked for while the meeting is minimized: then the picker stands on its own, on top.
     const hidden = parent.isMinimized();
+    // Over a share (even with the meeting window back) it stays above the floating windows.
+    const overShare = hidden || sharingPages.has(contents.id);
     const picker = new BrowserWindow({
         ...(hidden ? { alwaysOnTop: true } : { parent, modal: true }),
         width: 860,
@@ -575,7 +588,7 @@ async function pickShare(request, callback) {
     // New Share opens it over the screen being shared: students must not see it, and it stands above
     // the floating windows (an open Participants or Chat window must not cover it).
     picker.setContentProtection(true);
-    if (hidden) {
+    if (overShare) {
         picker.setAlwaysOnTop(true, 'screen-saver');
         pickers.set(contents.id, picker);
     }
@@ -748,6 +761,8 @@ const meetingCovers = (openerId, b) => {
     const contents = webContents.fromId(openerId);
     const meeting = contents && !contents.isDestroyed() && BrowserWindow.fromWebContents(contents);
     if (!meeting || meeting.isDestroyed() || meeting.isMinimized() || !meeting.isVisible()) return false;
+    // Only while the teacher is in it: back in the shared app, that app is over the meeting window again.
+    if (!meeting.isFocused()) return false;
     const m = meeting.getBounds();
     return m.x < b.x + b.width && b.x < m.x + m.width && m.y < b.y + b.height && b.y < m.y + m.height;
 };
