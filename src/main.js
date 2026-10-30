@@ -137,6 +137,9 @@ const raiseFloating = (openerId) => {
         // opens (with its menu or a notice) it is what the teacher is using.
         if (w && !w.isDestroyed() && w.isVisible()) w.setAlwaysOnTop(true, 'screen-saver');
     });
+    // A share picker opened over the share (New Share) stays above them all until it is answered.
+    const picker = pickers.get(openerId);
+    if (picker && !picker.isDestroyed() && picker.isVisible()) picker.setAlwaysOnTop(true, 'screen-saver');
 };
 
 // Floating windows (share pill/toolbar, annotation toolbar, videos): above everything on the shared
@@ -223,25 +226,86 @@ const homeBounds = (openerId, name, w, h, anchor) => {
 };
 
 // Participants and Chat stand at the right edge of the shared screen like Zoom's (Chat outermost), left
-// of a toolbar docked there, and the video window moves left of them, so nothing overlaps. Windows the
+// of a toolbar docked there, and the video window moves left of them, so nothing overlaps. They also
+// stay clear of the pill with its toolbar and notice and of the pen bar: those are raised over them,
+// so a panel under them would lose its title bar and search to their see-through windows. Windows the
 // teacher has moved stay where they were put.
 const PANEL_EDGE = 16;
 const PANEL_GAP = 8;
+const PANEL_MIN = 280;
+// The toolbar (about 57) and a notice (about 41) hanging off the pill, whether out or not: the panels
+// don't jump each time the toolbar comes out.
+const TOOLS_ROOM = 104;
+// A horizontal pen bar (its window grows with an open menu, which comes and goes).
+const PEN_ROOM = 64;
+const live = (w) => !!w && !w.isDestroyed();
+
+// The screen strips the undocked pill (with its toolbar) and pen bar keep for themselves. Measured on
+// the bars themselves (the anchors), so an open menu doesn't move the panels. The pen bar counts while
+// hidden too: it comes back where it was whenever the teacher annotates.
+function controlZones(kids) {
+    const zones = [];
+    const bar = kids[BAR];
+    if (live(bar) && !bar.lcDock) {
+        const b = bar.getBounds();
+        const area = screen.getDisplayMatching(b).workArea;
+        let left = b.x;
+        let right = b.x + b.width;
+        const tools = kids[BAR_TOOLS];
+        if (live(tools) && tools.lcPlaced) {
+            const t = tools.getBounds();
+            const a = tools.lcAnchor;
+            left = Math.min(left, t.x + (a ? a.x : 0));
+            right = Math.max(right, t.x + (a ? a.x + a.width : t.width));
+        }
+        // Like placeTools: the toolbar hangs under the pill, or over it when the pill is at the bottom.
+        const below = b.y + b.height + 2 + TOOLS_ROOM <= area.y + area.height;
+        zones.push(below
+            ? { left, right, top: b.y, bottom: b.y + b.height + 2 + TOOLS_ROOM }
+            : { left, right, top: b.y - 2 - TOOLS_ROOM, bottom: b.y + b.height });
+    }
+    const pen = kids[ANNOT_BAR];
+    if (live(pen) && pen.lcPlaced && !pen.lcDock) {
+        const p = pen.getBounds();
+        const a = pen.lcAnchor;
+        const left = p.x + (a ? a.x : 0);
+        const top = p.y + (a ? a.y : 0);
+        zones.push({ left, right: a ? left + a.width : p.x + p.width, top, bottom: top + Math.min(p.height, PEN_ROOM) });
+    }
+    return zones;
+}
+
 function layoutRight(openerId) {
     const kids = children.get(openerId);
     if (!kids) return;
-    const live = (w) => !!w && !w.isDestroyed();
     const area = sharedDisplay(openerId).workArea;
     let right = area.x + area.width - PANEL_EDGE;
     [BAR, ANNOT_BAR].forEach((name) => {
         const w = kids[name];
-        if (live(w) && w.isVisible() && w.lcDock === 'right') right = Math.min(right, w.getBounds().x - PANEL_GAP);
+        // The docked column itself (a notice or menu beside it comes and goes over the panels).
+        if (live(w) && w.isVisible() && w.lcDock === 'right') {
+            right = Math.min(right, w.getBounds().x + (w.lcAnchor ? w.lcAnchor.x : 0) - PANEL_GAP);
+        }
     });
+    const zones = controlZones(kids);
+    const middle = area.y + area.height / 2;
     [CHAT, PEOPLE].forEach((name) => {
         const w = kids[name];
         if (!live(w) || w.lcMoved) return;
-        const [width, height] = w.lcWanted || w.getSize();
-        moveQuietly(w, { x: right - width, y: area.y + PANEL_EDGE, width, height: Math.min(height, area.height - 2 * PANEL_EDGE) });
+        const [width, wanted] = w.lcWanted || w.getSize();
+        const x = right - width;
+        // Under the controls at the top, above those at the bottom.
+        let top = area.y + PANEL_EDGE;
+        let bottom = area.y + area.height - PANEL_EDGE;
+        zones.forEach((z) => {
+            if (z.right <= x || z.left >= x + width) return;
+            if ((z.top + z.bottom) / 2 < middle) top = Math.max(top, z.bottom + PANEL_GAP);
+            else bottom = Math.min(bottom, z.top - PANEL_GAP);
+        });
+        // A screen too short for that: the panel stays usable and reaches down to the screen edge.
+        const height = Math.max(Math.min(wanted, bottom - top), Math.min(PANEL_MIN, wanted));
+        const y = Math.max(area.y, Math.min(top, area.y + area.height - height));
+        moveQuietly(w, { x, y, width, height: Math.min(height, area.height) });
         right -= width + PANEL_GAP;
     });
     const videos = kids[VIDEOS];
@@ -442,6 +506,7 @@ function createMainWindow() {
         webPreferences: appWebPreferences()
     });
     wireContents(mainWindow.webContents);
+    wireWindowState(mainWindow);
     const url = siteUrl();
     if (url) mainWindow.loadURL(url);
     else mainWindow.loadFile(path.join(__dirname, 'site.html'));
@@ -459,6 +524,8 @@ const pageLanguage = (contents) => contents.executeJavaScript("localStorage.getI
     .catch(() => 'en');
 
 const picking = new Set();
+// Meeting window id -> its picker standing on its own over the shared screen (raiseFloating keeps it up).
+const pickers = new Map();
 
 async function pickShare(request, callback) {
     const contents = request.frame && webContents.fromFrame(request.frame);
@@ -499,7 +566,10 @@ async function pickShare(request, callback) {
     // New Share opens it over the screen being shared: students must not see it, and it stands above
     // the floating windows (an open Participants or Chat window must not cover it).
     picker.setContentProtection(true);
-    if (hidden) picker.setAlwaysOnTop(true, 'screen-saver');
+    if (hidden) {
+        picker.setAlwaysOnTop(true, 'screen-saver');
+        pickers.set(contents.id, picker);
+    }
     let answered = false;
     const answer = (streams) => {
         if (answered) return;
@@ -526,6 +596,7 @@ async function pickShare(request, callback) {
     ipcMain.on('picker:choose', onChoose);
     picker.on('closed', () => {
         ipcMain.removeListener('picker:choose', onChoose);
+        if (pickers.get(contents.id) === picker) pickers.delete(contents.id);
         answer({});
     });
 
@@ -557,14 +628,16 @@ const protectWindow = (win, on) => {
 };
 
 // The page counts chat messages as unread while its window is down, so it is told when that changes.
+// Wired when the window is made (not only at the first share), and re-read on every change of state,
+// so a missed restore (shown or focused another way) never leaves the page thinking it is down.
 const wireWindowState = (win) => {
     if (win.lcStateWired) return;
     win.lcStateWired = true;
-    const send = (minimized) => {
-        if (!win.isDestroyed() && !win.webContents.isDestroyed()) win.webContents.send('lc:window-state', { minimized });
+    const send = () => {
+        if (win.isDestroyed() || win.webContents.isDestroyed()) return;
+        win.webContents.send('lc:window-state', { minimized: win.isMinimized() || !win.isVisible() });
     };
-    win.on('minimize', () => send(true));
-    win.on('restore', () => send(false));
+    ['minimize', 'restore', 'show', 'hide', 'focus', 'maximize'].forEach((name) => win.on(name, send));
 };
 
 ipcMain.on('lc:sharing', (event, on) => {
@@ -664,8 +737,8 @@ function applySize(win, openerId, name, width, height, anchor = win.lcAnchor) {
         win.lcCenter = home.x + anchorMid(anchor, w);
         setBoundsQuietly(win, home);
         if (name === BAR) placeTools(openerId);
-        // Participants or Chat may already stand where the video window would go.
-        if (name === VIDEOS) layoutRight(openerId);
+        // Participants or Chat may already stand where the video window or a toolbar would go.
+        if (name !== BAR_TOOLS) layoutRight(openerId);
         return;
     }
     const old = win.getBounds();
@@ -696,10 +769,9 @@ function applySize(win, openerId, name, width, height, anchor = win.lcAnchor) {
     }
     setBoundsQuietly(win, { x, y, width: w, height: h });
     if (name === BAR) placeTools(openerId);
-    // A toolbar docking at (or leaving) the right edge moves Participants and Chat beside it.
-    const right = win.lcDock === 'right';
-    if ((name === BAR || name === ANNOT_BAR) && (right || win.lcRight)) layoutRight(openerId);
-    win.lcRight = right;
+    // A toolbar docking, undocking or changing size moves Participants and Chat clear of it (no move
+    // when nothing changed).
+    if (name === BAR || name === ANNOT_BAR) layoutRight(openerId);
 }
 
 ipcMain.on('lc:float-visible', (event, name, visible) => {
@@ -764,6 +836,8 @@ function endDrag(win, openerId, name) {
     win.lcMoved = true;
     if (name !== VIDEOS && !PANELS.includes(name)) decideDock(win, openerId, name, dropped);
     if (name === BAR) placeTools(openerId);
+    // Participants and Chat make way for a toolbar put down over them.
+    if (name === BAR || name === ANNOT_BAR) layoutRight(openerId);
 }
 
 ipcMain.on('lc:float-drag', (event, drag) => {
@@ -847,6 +921,7 @@ function openLink(link) {
     win.lcMeeting = true;
     win.setMenuBarVisibility(false);
     wireContents(win.webContents);
+    wireWindowState(win);
     win.loadURL(target);
 }
 
