@@ -20,8 +20,17 @@ contextBridge.exposeInMainWorld('satDesktop', {
     // The drawing layer over the shared screen takes the mouse only while drawing ('draw'), and the
     // keyboard too for the text tool ('text').
     setAnnotating: (mode) => ipcRenderer.send('lc:annotating', mode === 'text' || mode === 'draw' ? mode : false),
-    // Sizes a floating window ('lc-bar', 'lc-bartools', 'lc-annotbar', 'lc-videos'). anchor ({ x, y, width }):
-    // where its bar sits inside it, so the bar stays put when a menu grows the window.
+    // While sharing, Participants and Chat open as floating windows of their own ('lc-people', 'lc-chat').
+    floatingPanels: true,
+    // The meeting window went down ({ minimized: true }) or came back; returns an unsubscribe.
+    onWindowState: (fn) => {
+        const listener = (event, state) => fn(state);
+        ipcRenderer.on('lc:window-state', listener);
+        return () => ipcRenderer.removeListener('lc:window-state', listener);
+    },
+    // Sizes a floating window ('lc-bar', 'lc-bartools', 'lc-annotbar', 'lc-videos', 'lc-people',
+    // 'lc-chat'). anchor ({ x, y, width }): where its bar sits inside it, so the bar stays put when a
+    // menu grows the window.
     setFloatingSize: (name, width, height, anchor) => ipcRenderer.send(
         'lc:float-size', String(name), Number(width), Number(height),
         anchor ? { x: Number(anchor.x), y: Number(anchor.y), width: Number(anchor.width) } : undefined

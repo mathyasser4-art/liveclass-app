@@ -5,8 +5,10 @@
 //    annotation toolbar and a small video window float on top,
 //  - annotations drawn on a see-through layer (with Zoom's green border) over the shared screen,
 //  - liveclass:// links: "Start LiveClass" on the website opens the meeting straight in the app.
-// The floating windows and the drawing layer are left out of the screen capture: students get the
-// strokes over the data channel (as they do today), so nothing is drawn twice.
+//  - Participants and Chat open as windows of their own over the shared screen, like Zoom's.
+// The floating windows, the drawing layer, the share picker and (while sharing) the meeting window are
+// left out of the screen capture: students never see LiveClass itself, and they get the strokes over
+// the data channel (as they do today), so nothing is drawn twice.
 const {
     app, BrowserWindow, Menu, desktopCapturer, globalShortcut, ipcMain, screen, session, shell, systemPreferences, webContents
 } = require('electron');
@@ -34,7 +36,12 @@ const ANNOT_BAR = 'lc-annotbar';
 const VIDEOS = 'lc-videos';
 const OVERLAY = 'lc-annotate';
 const MEETING = 'lc-meeting';
-const FLOATING = [BAR, BAR_TOOLS, ANNOT_BAR, VIDEOS];
+// Zoom's floating Participants and Chat windows while sharing. They take the keyboard (chat, search);
+// every other floating window never does.
+const PEOPLE = 'lc-people';
+const CHAT = 'lc-chat';
+const PANELS = [PEOPLE, CHAT];
+const FLOATING = [BAR, BAR_TOOLS, ANNOT_BAR, VIDEOS, ...PANELS];
 const PROTOCOL = 'liveclass';
 
 // ---- Settings (the chosen site) -----------------------------------------------------------------
@@ -123,7 +130,7 @@ const sharedDisplay = (openerId) => {
 // The floating windows stay above the drawing layer.
 const raiseFloating = (openerId) => {
     const kids = childrenOf(openerId);
-    [ANNOT_BAR, VIDEOS, BAR, BAR_TOOLS].forEach((name) => {
+    [...PANELS, ANNOT_BAR, VIDEOS, BAR, BAR_TOOLS].forEach((name) => {
         const w = kids[name];
         // Re-asserting "topmost" moves a window to the top of that band without moving, sizing or
         // showing it (moveTop would re-show the hidden pen bar). The share toolbar goes last: when it
@@ -140,13 +147,19 @@ const setUpFloating = (win, openerId, name) => {
     win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
     win.setContentProtection(true);
     const [width, height] = win.getSize();
+    const panel = PANELS.includes(name);
     if (name === BAR_TOOLS) placeTools(openerId, width, height);
+    else if (panel) win.lcWanted = [width, height];
     else setBoundsQuietly(win, homeBounds(openerId, name, width, height));
     win.on('closed', () => {
         stopDrag(win);
         if (childrenOf(openerId)[name] === win) delete childrenOf(openerId)[name];
+        // The video window takes back the room a closed panel leaves.
+        if (panel) layoutRight(openerId);
     });
-    if (name !== VIDEOS && name !== BAR_TOOLS) {
+    // Typing in Chat brings its window up among the always-on-top ones: the toolbars go back over it.
+    if (panel) win.on('focus', () => raiseFloating(openerId));
+    if (name !== VIDEOS && name !== BAR_TOOLS && !panel) {
         // Pages from before the page-driven drag move the toolbars by drag regions: only the teacher's
         // own drags dock or undock them (our resizes and drags move them too), once the window stops.
         let settle = null;
@@ -163,6 +176,13 @@ const setUpFloating = (win, openerId, name) => {
     pendingSizes.delete(`${openerId}:${name}`);
     if (pending) applySize(win, openerId, name, ...pending);
     attachToLayer(openerId);
+    if (panel) {
+        layoutRight(openerId);
+        // Chat comes up ready to type in; Participants doesn't take the keyboard from the shared app.
+        if (name === CHAT) win.show();
+        else win.showInactive();
+        raiseFloating(openerId);
+    }
 };
 
 // A toolbar dropped at the left or right screen edge docks there (the page turns it vertical).
@@ -202,6 +222,35 @@ const homeBounds = (openerId, name, w, h, anchor) => {
     };
 };
 
+// Participants and Chat stand at the right edge of the shared screen like Zoom's (Chat outermost), left
+// of a toolbar docked there, and the video window moves left of them, so nothing overlaps. Windows the
+// teacher has moved stay where they were put.
+const PANEL_EDGE = 16;
+const PANEL_GAP = 8;
+function layoutRight(openerId) {
+    const kids = children.get(openerId);
+    if (!kids) return;
+    const live = (w) => !!w && !w.isDestroyed();
+    const area = sharedDisplay(openerId).workArea;
+    let right = area.x + area.width - PANEL_EDGE;
+    [BAR, ANNOT_BAR].forEach((name) => {
+        const w = kids[name];
+        if (live(w) && w.isVisible() && w.lcDock === 'right') right = Math.min(right, w.getBounds().x - PANEL_GAP);
+    });
+    [CHAT, PEOPLE].forEach((name) => {
+        const w = kids[name];
+        if (!live(w) || w.lcMoved) return;
+        const [width, height] = w.lcWanted || w.getSize();
+        moveQuietly(w, { x: right - width, y: area.y + PANEL_EDGE, width, height: Math.min(height, area.height - 2 * PANEL_EDGE) });
+        right -= width + PANEL_GAP;
+    });
+    const videos = kids[VIDEOS];
+    if (live(videos) && videos.lcPlaced && !videos.lcMoved) {
+        const b = videos.getBounds();
+        moveQuietly(videos, { x: right - b.width, y: b.y, width: b.width, height: b.height });
+    }
+}
+
 // The share toolbar hangs centred just under the pill (above it when the pill is at the bottom).
 function placeTools(openerId, width, height) {
     const kids = childrenOf(openerId);
@@ -233,6 +282,11 @@ const setBoundsQuietly = (win, bounds) => {
     } finally {
         win.lcResizing = false;
     }
+};
+
+const moveQuietly = (win, b) => {
+    const o = win.getBounds();
+    if (o.x !== b.x || o.y !== b.y || o.width !== b.width || o.height !== b.height) setBoundsQuietly(win, b);
 };
 
 // A toolbar dropped within reach of the left or right screen edge docks there and turns vertical.
@@ -289,14 +343,18 @@ function attachToLayer(openerId) {
 function wireContents(contents) {
     contents.setWindowOpenHandler(({ url, frameName }) => {
         if (FLOATING.includes(frameName) && url === 'about:blank') {
+            const panel = PANELS.includes(frameName);
             return {
                 action: 'allow',
                 overrideBrowserWindowOptions: {
                     frame: false, transparent: true, backgroundColor: '#00000000', hasShadow: false, resizable: false,
                     minimizable: false, maximizable: false, fullscreenable: false, skipTaskbar: true, title: 'LiveClass', icon: ICON,
-                    focusable: false,
-                    // The pen bar and the share toolbar open hidden; the page shows them when needed.
-                    show: frameName !== ANNOT_BAR && frameName !== BAR_TOOLS,
+                    // Clicks on a toolbar must never take the focus from the shared app; Participants and
+                    // Chat have fields to type in.
+                    focusable: panel,
+                    // The pen bar and the share toolbar open hidden; the page shows them when needed. The
+                    // panels show once they are in place (setUpFloating).
+                    show: frameName !== ANNOT_BAR && frameName !== BAR_TOOLS && !panel,
                     webPreferences: { backgroundThrottling: false }
                 }
             };
@@ -354,6 +412,14 @@ function wireContents(contents) {
         [...FLOATING.map((name) => kids[name]), kids.overlay].forEach((w) => { if (w && !w.isDestroyed()) w.close(); });
         children.delete(id);
         shares.delete(id);
+        // A page reloaded mid-share never says the share ended.
+        if (sharingPages.has(id)) {
+            try {
+                protectWindow(BrowserWindow.fromWebContents(contents), false);
+            } catch (e) {
+                // The window is already gone.
+            }
+        }
         setSharingShortcut(id, false);
     };
     contents.on('destroyed', closeKids);
@@ -430,6 +496,10 @@ async function pickShare(request, callback) {
         webPreferences: { preload: path.join(__dirname, 'local-preload.js'), contextIsolation: true, sandbox: true }
     });
     picker.setMenuBarVisibility(false);
+    // New Share opens it over the screen being shared: students must not see it, and it stands above
+    // the floating windows (an open Participants or Chat window must not cover it).
+    picker.setContentProtection(true);
+    if (hidden) picker.setAlwaysOnTop(true, 'screen-saver');
     let answered = false;
     const answer = (streams) => {
         if (answered) return;
@@ -480,11 +550,30 @@ async function pickShare(request, callback) {
 }
 
 // ---- Bridge for the meeting page (window.satDesktop, see preload.js) -----------------------------
+// Like Zoom, students never see the meeting window in the share (chat, names, the waiting room),
+// even when the teacher brings it back over the shared screen.
+const protectWindow = (win, on) => {
+    if (win && !win.isDestroyed()) win.setContentProtection(!!on);
+};
+
+// The page counts chat messages as unread while its window is down, so it is told when that changes.
+const wireWindowState = (win) => {
+    if (win.lcStateWired) return;
+    win.lcStateWired = true;
+    const send = (minimized) => {
+        if (!win.isDestroyed() && !win.webContents.isDestroyed()) win.webContents.send('lc:window-state', { minimized });
+    };
+    win.on('minimize', () => send(true));
+    win.on('restore', () => send(false));
+};
+
 ipcMain.on('lc:sharing', (event, on) => {
     if (!fromOurs(event)) return;
     const win = BrowserWindow.fromWebContents(event.sender);
     if (!win) return;
     setSharingShortcut(event.sender.id, !!on);
+    wireWindowState(win);
+    protectWindow(win, on);
     if (on) {
         if (!win.isMinimized()) win.minimize();
     } else {
@@ -556,6 +645,18 @@ function applySize(win, openerId, name, width, height, anchor = win.lcAnchor) {
         placeTools(openerId, w, h);
         return;
     }
+    if (PANELS.includes(name)) {
+        win.lcWanted = [w, h];
+        win.lcPlaced = true;
+        if (!win.lcMoved) {
+            layoutRight(openerId);
+            return;
+        }
+        const b = win.getBounds();
+        const area = screen.getDisplayMatching(b).workArea;
+        setBoundsQuietly(win, { x: b.x, y: b.y, width: w, height: Math.min(h, area.height) });
+        return;
+    }
     // The first size also places the window (Chromium may still move a new popup after it opens).
     if (!win.lcPlaced) {
         win.lcPlaced = true;
@@ -563,6 +664,8 @@ function applySize(win, openerId, name, width, height, anchor = win.lcAnchor) {
         win.lcCenter = home.x + anchorMid(anchor, w);
         setBoundsQuietly(win, home);
         if (name === BAR) placeTools(openerId);
+        // Participants or Chat may already stand where the video window would go.
+        if (name === VIDEOS) layoutRight(openerId);
         return;
     }
     const old = win.getBounds();
@@ -593,6 +696,10 @@ function applySize(win, openerId, name, width, height, anchor = win.lcAnchor) {
     }
     setBoundsQuietly(win, { x, y, width: w, height: h });
     if (name === BAR) placeTools(openerId);
+    // A toolbar docking at (or leaving) the right edge moves Participants and Chat beside it.
+    const right = win.lcDock === 'right';
+    if ((name === BAR || name === ANNOT_BAR) && (right || win.lcRight)) layoutRight(openerId);
+    win.lcRight = right;
 }
 
 ipcMain.on('lc:float-visible', (event, name, visible) => {
@@ -605,6 +712,7 @@ ipcMain.on('lc:float-visible', (event, name, visible) => {
     }
     if (name === BAR_TOOLS) placeTools(event.sender.id);
     win.showInactive();
+    if (name === ANNOT_BAR && win.lcDock === 'right') layoutRight(event.sender.id);
     return raiseFloating(event.sender.id);
 });
 
@@ -652,7 +760,9 @@ function endDrag(win, openerId, name) {
     const dropped = { x, y, width: b.width, height: b.height };
     if (x !== b.x || y !== b.y) setBoundsQuietly(win, dropped);
     win.lcCenter = barCentre(win, dropped);
-    if (name !== VIDEOS) decideDock(win, openerId, name, dropped);
+    // Put somewhere by the teacher: the right-edge layout leaves it there.
+    win.lcMoved = true;
+    if (name !== VIDEOS && !PANELS.includes(name)) decideDock(win, openerId, name, dropped);
     if (name === BAR) placeTools(openerId);
 }
 
