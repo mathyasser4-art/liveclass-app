@@ -59,6 +59,8 @@ contextBridge.exposeInMainWorld('satDesktop', {
         ipcRenderer.on('lc:dock', listener);
         return () => ipcRenderer.removeListener('lc:dock', listener);
     },
+    // Whether Ctrl+Alt+Shift+H is LiveClass's now (another program may hold it): a promise of a boolean.
+    controlsShortcut: () => ipcRenderer.invoke('lc:controls-shortcut'),
     // Ctrl+Alt+Shift+H while sharing: hide or show the floating meeting controls; returns an unsubscribe.
     onToggleControls: (fn) => {
         const listener = () => fn();

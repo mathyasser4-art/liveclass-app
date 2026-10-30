@@ -324,7 +324,7 @@ function placeTools(openerId, width, height) {
     const bar = kids[BAR];
     const tools = kids[BAR_TOOLS];
     if (!tools || tools.isDestroyed()) return;
-    const [w, h] = width ? [width, height] : tools.getSize();
+    const [w, h] = width ? [width, height] : sizeOf(tools);
     // No pill yet: just the size (the pill places the toolbar once it is set up).
     if (!bar || bar.isDestroyed()) {
         const t = tools.getBounds();
@@ -346,10 +346,15 @@ const setBoundsQuietly = (win, bounds) => {
     win.lcResizing = true;
     try {
         win.setBounds(bounds);
+        // The size we asked for: reading it back can be a pixel off at 125% or 150% scaling, and
+        // feeding that back in on every drag tick would let the window creep.
+        win.lcSize = [bounds.width, bounds.height];
     } finally {
         win.lcResizing = false;
     }
 };
+
+const sizeOf = (win) => win.lcSize || win.getSize();
 
 const moveQuietly = (win, b) => {
     const o = win.getBounds();
@@ -849,17 +854,29 @@ function setSharingShortcut(id, on) {
         if (globalShortcut.isRegistered(CONTROLS_SHORTCUT)) globalShortcut.unregister(CONTROLS_SHORTCUT);
         return;
     }
+    registerControlsShortcut();
+}
+
+// False when another program holds the shortcut (the page then keeps its controls shown).
+function registerControlsShortcut() {
+    if (globalShortcut.isRegistered(CONTROLS_SHORTCUT)) return true;
     try {
-        globalShortcut.register(CONTROLS_SHORTCUT, () => {
+        return globalShortcut.register(CONTROLS_SHORTCUT, () => {
             sharingPages.forEach((pageId) => {
                 const page = webContents.fromId(pageId);
                 if (page && !page.isDestroyed()) page.send('lc:toggle-controls');
             });
         });
     } catch (e) {
-        // Another app owns the shortcut; the controls come back when the share ends.
+        return false;
     }
 }
+
+// Asked before hiding: tries again, in case the other program has let the shortcut go.
+ipcMain.handle('lc:controls-shortcut', (event) => {
+    if (!fromOurs(event) || !sharingPages.has(event.sender.id) || !app.isReady()) return false;
+    return registerControlsShortcut();
+});
 
 ipcMain.on('lc:focus-meeting', (event) => {
     if (!fromOurs(event)) return;
@@ -920,7 +937,8 @@ function applySize(win, openerId, name, width, height, anchor = win.lcAnchor) {
         if (name !== BAR_TOOLS) layoutRight(openerId);
         return;
     }
-    const old = win.getBounds();
+    const old = { ...win.getBounds() };
+    [old.width, old.height] = sizeOf(win);
     // While it is being dragged the window just takes its new size; the drag keeps placing it.
     if (win.lcDrag) {
         setBoundsQuietly(win, { x: old.x, y: old.y, width: w, height: h });
@@ -993,10 +1011,11 @@ function startDrag(win, openerId, name, offsetX, offsetY) {
         }
         const point = screen.getCursorScreenPoint();
         const b = win.getBounds();
+        const [width, height] = sizeOf(win);
         const x = Math.round(point.x - offsetX);
         const y = Math.round(point.y - offsetY);
         if (x === b.x && y === b.y) return;
-        setBoundsQuietly(win, { x, y, width: b.width, height: b.height });
+        setBoundsQuietly(win, { x, y, width, height });
         if (name === BAR) placeTools(openerId);
     }, DRAG_TICK);
 }
@@ -1004,7 +1023,8 @@ function startDrag(win, openerId, name, offsetX, offsetY) {
 function endDrag(win, openerId, name) {
     if (win.isDestroyed() || !stopDrag(win)) return;
     // Dropped partly off the screen: back inside the work area.
-    const b = win.getBounds();
+    const [width, height] = sizeOf(win);
+    const b = { ...win.getBounds(), width, height };
     const area = screen.getDisplayMatching(b).workArea;
     const x = Math.max(area.x, Math.min(b.x, area.x + area.width - b.width));
     const y = Math.max(area.y, Math.min(b.y, area.y + area.height - b.height));
