@@ -22,6 +22,9 @@ const SITES = [
 const devSite = (process.argv.find((a) => a.startsWith('--site=')) || '').slice(7);
 // Development runs get their own profile, so they work next to an installed LiveClass.
 if (devSite) app.setPath('userData', path.join(app.getPath('appData'), 'LiveClass-dev'));
+// Chromium stops painting windows it thinks are covered; the see-through share windows sit on top of
+// each other and of the shared screen, so that guess is wrong for them.
+app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion');
 const ICON = path.join(__dirname, '..', 'assets', 'icon.png');
 const BAR = 'lc-bar';
 const ANNOT_BAR = 'lc-annotbar';
@@ -117,7 +120,13 @@ const sharedDisplay = (openerId) => {
 // The floating windows stay above the drawing layer.
 const raiseFloating = (openerId) => {
     const kids = childrenOf(openerId);
-    FLOATING.forEach((name) => { if (kids[name] && !kids[name].isDestroyed()) kids[name].moveTop(); });
+    [ANNOT_BAR, VIDEOS, BAR].forEach((name) => {
+        const w = kids[name];
+        // Re-asserting "topmost" moves a window to the top of that band without moving, sizing or
+        // showing it (moveTop would re-show the hidden pen bar). The share toolbar goes last: when it
+        // opens (with its menu or a notice) it is what the teacher is using.
+        if (w && !w.isDestroyed() && w.isVisible()) w.setAlwaysOnTop(true, 'screen-saver');
+    });
 };
 
 // Floating windows (share pill/toolbar, annotation toolbar, videos): above everything on the shared
@@ -127,23 +136,32 @@ const setUpFloating = (win, openerId, name) => {
     win.setAlwaysOnTop(true, 'screen-saver');
     win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
     win.setContentProtection(true);
-    const area = sharedDisplay(openerId).workArea;
-    const [width] = win.getSize();
-    if (name === VIDEOS) win.setPosition(area.x + area.width - width - 16, area.y + 64);
-    else win.setPosition(Math.round(area.x + (area.width - width) / 2), area.y + (name === ANNOT_BAR ? 58 : 6));
+    const [width, height] = win.getSize();
+    setBoundsQuietly(win, homeBounds(openerId, name, width, height));
     win.on('closed', () => { if (childrenOf(openerId)[name] === win) delete childrenOf(openerId)[name]; });
     if (name !== VIDEOS) {
-        // Decided once the window stops moving (a drag fires "move" all the way).
+        // Only the teacher's own drags dock or undock a toolbar (our resizes move it too); decided once
+        // the window stops moving.
         let settle = null;
         win.on('move', () => {
+            if (win.lcResizing) return;
+            // Where the teacher put it, right away (a resize during or just after the drag keeps it).
+            const dropped = win.getBounds();
+            win.lcCenter = dropped.x + dropped.width / 2;
             clearTimeout(settle);
             settle = setTimeout(() => {
                 if (win.isDestroyed()) return;
-                const side = dockSide(win);
+                const side = dockSide(dropped);
                 if (side === (win.lcDock || '')) return;
                 win.lcDock = side;
                 const opener = webContents.fromId(openerId);
                 if (opener && !opener.isDestroyed()) opener.send('lc:dock', { name, side });
+                // A share toolbar docking where the pen bar already is pushes the pen bar under it.
+                const pen = childrenOf(openerId)[ANNOT_BAR];
+                if (name === BAR && side && pen && !pen.isDestroyed() && pen.lcDock === side) {
+                    const [pw, ph] = pen.getSize();
+                    setTimeout(() => { if (!pen.isDestroyed()) applySize(pen, openerId, ANNOT_BAR, pw, ph); }, 400);
+                }
             }, 300);
         });
     }
@@ -153,10 +171,29 @@ const setUpFloating = (win, openerId, name) => {
     attachToLayer(openerId);
 };
 
+// Where each floating window first appears (DIP). Nothing overlaps, even with the share toolbar open
+// (about 112 px tall): pill top centre, pen bar under it, preview on the right below both.
+const PEN_BAR_TOP = 132;
+const VIDEOS_TOP = 214;
+const homeBounds = (openerId, name, w, h) => {
+    const area = sharedDisplay(openerId).workArea;
+    if (name === VIDEOS) return { x: area.x + area.width - w - 16, y: area.y + VIDEOS_TOP, width: w, height: h };
+    return { x: Math.round(area.x + (area.width - w) / 2), y: area.y + (name === ANNOT_BAR ? PEN_BAR_TOP : 6), width: w, height: h };
+};
+
+// Our own resizes must not count as the teacher moving a toolbar.
+const setBoundsQuietly = (win, bounds) => {
+    win.lcResizing = true;
+    try {
+        win.setBounds(bounds);
+    } finally {
+        win.lcResizing = false;
+    }
+};
+
 // A toolbar dropped within reach of the left or right screen edge docks there and turns vertical.
 const DOCK_REACH = 40;
-const dockSide = (win) => {
-    const b = win.getBounds();
+const dockSide = (b) => {
     const area = screen.getDisplayMatching(b).workArea;
     if (b.x <= area.x + DOCK_REACH) return 'left';
     if (b.x + b.width >= area.x + area.width - DOCK_REACH) return 'right';
@@ -198,7 +235,10 @@ function attachToLayer(openerId) {
     if (!layer || layer.isDestroyed()) return;
     FLOATING.forEach((name) => {
         const w = kids[name];
-        if (w && !w.isDestroyed() && w.getParentWindow() !== layer) w.setParentWindow(layer);
+        if (!w || w.isDestroyed() || w.getParentWindow() === layer) return;
+        const visible = w.isVisible();
+        w.setParentWindow(layer);
+        if (!visible) w.hide();
     });
 }
 
@@ -210,7 +250,9 @@ function wireContents(contents) {
                 overrideBrowserWindowOptions: {
                     frame: false, transparent: true, backgroundColor: '#00000000', hasShadow: false, resizable: false,
                     minimizable: false, maximizable: false, fullscreenable: false, skipTaskbar: true, title: 'LiveClass', icon: ICON,
-                    show: frameName !== ANNOT_BAR
+                    focusable: false,
+                    show: frameName !== ANNOT_BAR,
+                    webPreferences: { backgroundThrottling: false }
                 }
             };
         }
@@ -220,7 +262,8 @@ function wireContents(contents) {
                 overrideBrowserWindowOptions: {
                     frame: false, transparent: true, backgroundColor: '#00000000', hasShadow: false, focusable: false,
                     resizable: false, movable: false, minimizable: false, maximizable: false, fullscreenable: false,
-                    skipTaskbar: true, enableLargerThanScreen: true, show: true
+                    skipTaskbar: true, enableLargerThanScreen: true, show: true,
+                    webPreferences: { backgroundThrottling: false }
                 }
             };
         }
@@ -431,25 +474,31 @@ function applySize(win, openerId, name, width, height) {
     // The first size also places the window (Chromium may still move a new popup after it opens).
     if (!win.lcPlaced) {
         win.lcPlaced = true;
-        const area = sharedDisplay(openerId).workArea;
-        const x = name === VIDEOS ? area.x + area.width - w - 16 : Math.round(area.x + (area.width - w) / 2);
-        const y = area.y + (name === VIDEOS ? 64 : name === ANNOT_BAR ? 58 : 6);
-        win.setBounds({ x, y, width: w, height: h });
+        const home = homeBounds(openerId, name, w, h);
+        win.lcCenter = home.x + w / 2;
+        setBoundsQuietly(win, home);
         return;
     }
     const old = win.getBounds();
     const area = screen.getDisplayMatching(old).workArea;
-    // Docked toolbars hug their edge (and grow away from it); others grow from their middle.
+    // Docked toolbars hug their edge (and grow away from it); the preview keeps its right edge; the
+    // others keep their centre, so opening and folding the toolbar never shifts the pill.
     let x;
     if (win.lcDock === 'left') x = area.x + 4;
     else if (win.lcDock === 'right') x = area.x + area.width - w - 4;
-    else x = name === VIDEOS ? old.x + old.width - w : Math.round(old.x + (old.width - w) / 2);
-    // An undocked toolbar stays clear of the edges, so growing it can't dock it again.
-    if (!win.lcDock && name !== VIDEOS) {
-        x = Math.max(area.x + DOCK_REACH + 8, Math.min(x, area.x + area.width - w - DOCK_REACH - 8));
+    else if (name === VIDEOS) x = old.x + old.width - w;
+    else x = Math.round((typeof win.lcCenter === 'number' ? win.lcCenter : old.x + old.width / 2) - w / 2);
+    x = Math.max(area.x, Math.min(x, area.x + area.width - w));
+    let y = Math.max(area.y, Math.min(old.y, area.y + area.height - h));
+    // Both toolbars docked on the same side: the pen bar goes under the share toolbar.
+    if (name === ANNOT_BAR && win.lcDock) {
+        const bar = childrenOf(openerId)[BAR];
+        if (bar && !bar.isDestroyed() && bar.lcDock === win.lcDock) {
+            const b = bar.getBounds();
+            if (y < b.y + b.height + 8 && y + h > b.y) y = Math.min(b.y + b.height + 8, area.y + area.height - h);
+        }
     }
-    const y = Math.max(area.y, Math.min(old.y, area.y + area.height - h));
-    win.setBounds({ x, y, width: w, height: h });
+    setBoundsQuietly(win, { x, y, width: w, height: h });
 }
 
 ipcMain.on('lc:float-visible', (event, name, visible) => {
@@ -476,6 +525,7 @@ ipcMain.on('lc:annotating', (event, mode) => {
     if (layer.lcFocusable !== wantFocus) {
         layer.lcFocusable = wantFocus;
         layer.setFocusable(wantFocus);
+        layer.setSkipTaskbar(true);
     }
     if (wantFocus) layer.focus();
     raiseFloating(event.sender.id);
