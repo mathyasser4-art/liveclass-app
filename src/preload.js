@@ -22,6 +22,17 @@ contextBridge.exposeInMainWorld('satDesktop', {
     setAnnotating: (mode) => ipcRenderer.send('lc:annotating', mode === 'text' || mode === 'draw' ? mode : false),
     // While sharing, Participants and Chat open as floating windows of their own ('lc-people', 'lc-chat').
     floatingPanels: true,
+    // Zoom's Save with no dialog: { data: PNG data URL, format: 'png' | 'pdf', name, course } -> a
+    // promise of the saved file's path (in Documents/LiveClass); rejects when nothing was written.
+    saveAnnotation: (image) => ipcRenderer.invoke('lc:save-annotation', {
+        data: String((image && image.data) || ''),
+        format: image && image.format === 'pdf' ? 'pdf' : 'png',
+        name: String((image && image.name) || ''),
+        course: String((image && image.course) || '')
+    }),
+    saveFormats: ['png', 'pdf'],
+    // Opens Explorer (Finder) on a file Save wrote.
+    showInFolder: (file) => ipcRenderer.send('lc:show-in-folder', String(file)),
     // The meeting window went down ({ minimized: true }) or came back; returns an unsubscribe.
     onWindowState: (fn) => {
         const listener = (event, state) => fn(state);

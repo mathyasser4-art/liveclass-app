@@ -6,11 +6,13 @@
 //  - annotations drawn on a see-through layer (with Zoom's green border) over the shared screen,
 //  - liveclass:// links: "Start LiveClass" on the website opens the meeting straight in the app.
 //  - Participants and Chat open as windows of their own over the shared screen, like Zoom's.
+//  - Save (annotations) writes straight to Documents/LiveClass, one folder per meeting, no dialog.
 // The floating windows, the drawing layer, the share picker and (while sharing) the meeting window are
 // left out of the screen capture: students never see LiveClass itself, and they get the strokes over
 // the data channel (as they do today), so nothing is drawn twice.
 const {
-    app, BrowserWindow, Menu, desktopCapturer, globalShortcut, ipcMain, screen, session, shell, systemPreferences, webContents
+    app, BrowserWindow, Menu, desktopCapturer, globalShortcut, ipcMain, nativeImage, screen, session, shell, systemPreferences,
+    webContents
 } = require('electron');
 const path = require('path');
 const fs = require('fs');
@@ -866,6 +868,143 @@ ipcMain.on('lc:float-drag', (event, drag) => {
 
 ipcMain.handle('lc:share-info', (event) => (fromOurs(event) ? shares.get(event.sender.id) || null : null));
 
+// ---- Saving annotations (Zoom's Save) ------------------------------------------------------------
+// Like Zoom's "Save" there is no dialog (a Save As dialog would open under the share windows, or not
+// at all with the meeting minimized): Documents/LiveClass/<yyyy-MM-dd HH.mm> <course>/LiveClass
+// <yyyy-MM-dd HH.mm.ss>.png (or .pdf), one folder per meeting, in local time.
+const saveRoot = () => path.join(app.getPath('documents'), 'LiveClass');
+const two = (n) => String(n).padStart(2, '0');
+const localStamp = (d, seconds) => `${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())} `
+    + `${two(d.getHours())}.${two(d.getMinutes())}${seconds ? `.${two(d.getSeconds())}` : ''}`;
+// Something Windows takes as part of a file name.
+const cleanName = (name) => {
+    const clean = String(name || '').replace(/[\x00-\x1f<>:"/\\|?*]/g, ' ').replace(/\s+/g, ' ').trim()
+        .slice(0, 80)
+        .replace(/[. ]+$/, '');
+    return /^(con|prn|aux|nul|com\d|lpt\d)$/i.test(clean) ? `${clean}_` : clean;
+};
+// Two saves in the same second don't overwrite each other.
+const freeFile = (folder, stem, ext) => {
+    for (let n = 1; n < 1000; n += 1) {
+        const file = path.join(folder, `${stem}${n > 1 ? ` (${n})` : ''}${ext}`);
+        if (!fs.existsSync(file)) return file;
+    }
+    return path.join(folder, `${stem} ${Date.now()}${ext}`);
+};
+const insideSaves = (file) => {
+    const rel = path.relative(saveRoot(), path.resolve(file));
+    return !!rel && !rel.startsWith('..') && !path.isAbsolute(rel);
+};
+
+// Meeting page (webContents id) -> its folder, made at its first save.
+const saveFolders = new Map();
+const pageKey = (contents) => {
+    try {
+        const u = new URL(contents.getURL());
+        return `${u.origin}${u.pathname}`;
+    } catch (e) {
+        return '';
+    }
+};
+const meetingFolder = (contents, course) => {
+    const key = pageKey(contents);
+    const known = saveFolders.get(contents.id);
+    if (known && known.key === key) return known.folder;
+    const folder = path.join(saveRoot(), [localStamp(new Date(), false), cleanName(course)].filter(Boolean).join(' '));
+    if (!known) contents.once('destroyed', () => saveFolders.delete(contents.id));
+    saveFolders.set(contents.id, { key, folder });
+    return folder;
+};
+
+// The PNG as a one-page PDF exactly its size (landscape when wider), printed by a hidden window.
+const PDF_TIMEOUT = 20000;
+async function pngToPdf(png) {
+    const { width, height } = nativeImage.createFromBuffer(png).getSize();
+    if (!width || !height) throw new Error('Not an image');
+    const dir = await fs.promises.mkdtemp(path.join(app.getPath('temp'), 'liveclass-'));
+    const page = path.join(dir, 'page.html');
+    await fs.promises.writeFile(path.join(dir, 'page.png'), png);
+    await fs.promises.writeFile(page, '<!doctype html><html><head><meta charset="utf-8"><style>'
+        + `@page { size: ${width}px ${height}px; margin: 0; }`
+        + `html, body { margin: 0; padding: 0; width: ${width}px; height: ${height}px; overflow: hidden; }`
+        + `img { display: block; width: ${width}px; height: ${height}px; }`
+        + '</style></head><body><img src="page.png"></body></html>');
+    const win = new BrowserWindow({
+        show: false,
+        width: 800,
+        height: 600,
+        webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false, javascript: false }
+    });
+    let timer = null;
+    try {
+        await win.loadFile(page);
+        const inches = (px) => px / 96;
+        const print = win.webContents.printToPDF({
+            printBackground: true,
+            preferCSSPageSize: true,
+            landscape: width > height,
+            pageSize: { width: inches(Math.min(width, height)), height: inches(Math.max(width, height)) },
+            margins: { top: 0, bottom: 0, left: 0, right: 0 },
+            pageRanges: '1'
+        });
+        const late = new Promise((resolve, reject) => { timer = setTimeout(() => reject(new Error('PDF timed out')), PDF_TIMEOUT); });
+        return await Promise.race([print, late]);
+    } finally {
+        clearTimeout(timer);
+        if (!win.isDestroyed()) win.destroy();
+        fs.promises.rm(dir, { recursive: true, force: true }).catch(() => null);
+    }
+}
+
+// { data: PNG data URL, format: 'png' | 'pdf', name, course } -> where it was saved. Throws when the
+// file wasn't written, so the page only says "Saved" once it is there.
+const PNG_PREFIX = 'data:image/png;base64,';
+const MAX_SAVE = 120 * 1024 * 1024;
+ipcMain.handle('lc:save-annotation', async (event, request) => {
+    if (!fromOurs(event)) throw new Error('Not allowed');
+    const { data, format, name, course } = request || {};
+    if (typeof data !== 'string' || !data.startsWith(PNG_PREFIX) || data.length > MAX_SAVE) throw new Error('Not a PNG image');
+    const png = Buffer.from(data.slice(PNG_PREFIX.length), 'base64');
+    if (png.length < 8 || png.readUInt32BE(0) !== 0x89504e47) throw new Error('Not a PNG image');
+    const pdf = format === 'pdf';
+    const folder = meetingFolder(event.sender, course);
+    await fs.promises.mkdir(folder, { recursive: true });
+    const file = freeFile(folder, `${cleanName(name) || 'LiveClass'} ${localStamp(new Date(), true)}`, pdf ? '.pdf' : '.png');
+    await fs.promises.writeFile(file, pdf ? await pngToPdf(png) : png);
+    return file;
+});
+
+// Zoom's "Show in Folder" (only for what Save wrote).
+ipcMain.on('lc:show-in-folder', (event, file) => {
+    if (!fromOurs(event) || typeof file !== 'string' || !insideSaves(file) || !fs.existsSync(file)) return;
+    shell.showItemInFolder(path.resolve(file));
+});
+
+// A meeting page: the meeting window, or a /live page of ours in another window.
+const isMeetingPage = (contents) => {
+    const win = BrowserWindow.fromWebContents(contents);
+    if (win && win.lcMeeting) return true;
+    const url = contents.getURL();
+    try {
+        return isOurs(url) && /^\/live(\/|$)/.test(new URL(url).pathname);
+    } catch (e) {
+        return false;
+    }
+};
+// Pages from before saveAnnotation (and anything else a meeting downloads) save the same way, into
+// the meeting's folder, instead of opening a Save As dialog behind the share windows.
+const saveDownload = (event, item, contents) => {
+    if (!contents || contents.isDestroyed() || !isMeetingPage(contents)) return;
+    try {
+        const folder = meetingFolder(contents, '');
+        fs.mkdirSync(folder, { recursive: true });
+        const ext = path.extname(item.getFilename());
+        item.setSavePath(freeFile(folder, cleanName(path.basename(item.getFilename(), ext)) || 'LiveClass', cleanName(ext)));
+    } catch (e) {
+        // The usual Save As dialog then.
+    }
+};
+
 // Drawing ('draw'): the layer takes the mouse; typing ('text') also needs the keyboard; otherwise
 // (false) clicks go through to the shared apps.
 ipcMain.on('lc:annotating', (event, mode) => {
@@ -979,6 +1118,7 @@ if (!app.requestSingleInstanceLock()) {
         });
         ses.setPermissionCheckHandler((contents, permission, origin) => allowed.includes(permission) && isOurs(origin));
         ses.setDisplayMediaRequestHandler(pickShare);
+        ses.on('will-download', saveDownload);
 
         buildMenu();
         // Opened from a link: just the meeting, like Zoom (the main window opens when asked for).
