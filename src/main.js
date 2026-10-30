@@ -693,9 +693,18 @@ const windowFrame = (hwnd) => {
 };
 
 // The frame goes just outside the window, kept on its screen (a maximized window's frame would
-// otherwise be off the edges).
+// otherwise be off the edges). A window across two screens keeps its frame on both.
+const within = (b, a) => b.x >= a.x && b.y >= a.y && b.x + b.width <= a.x + a.width && b.y + b.height <= a.y + a.height;
+const unionOf = (rects) => {
+    const x = Math.min(...rects.map((r) => r.x));
+    const y = Math.min(...rects.map((r) => r.y));
+    const right = Math.max(...rects.map((r) => r.x + r.width));
+    const bottom = Math.max(...rects.map((r) => r.y + r.height));
+    return { x, y, width: right - x, height: bottom - y };
+};
 const borderBounds = (b) => {
-    const area = screen.getDisplayMatching(b).bounds;
+    const own = screen.getDisplayMatching(b).bounds;
+    const area = within(b, own) ? own : unionOf(screen.getAllDisplays().map((d) => d.bounds));
     const left = Math.round(Math.max(area.x, b.x - BORDER_WIDTH));
     const top = Math.round(Math.max(area.y, b.y - BORDER_WIDTH));
     const right = Math.round(Math.min(area.x + area.width, b.x + b.width + BORDER_WIDTH));
@@ -730,6 +739,14 @@ function stopBorder(openerId) {
     if (state.win && !state.win.isDestroyed()) state.win.close();
 }
 
+const meetingCovers = (openerId, b) => {
+    const contents = webContents.fromId(openerId);
+    const meeting = contents && !contents.isDestroyed() && BrowserWindow.fromWebContents(contents);
+    if (!meeting || meeting.isDestroyed() || meeting.isMinimized() || !meeting.isVisible()) return false;
+    const m = meeting.getBounds();
+    return m.x < b.x + b.width && b.x < m.x + m.width && m.y < b.y + b.height && b.y < m.y + m.height;
+};
+
 // Windows doesn't tell us when another app's window moves, so the frame looks every 200 ms.
 function followBorder(openerId, state) {
     if (borders.get(openerId) !== state) return;
@@ -745,11 +762,12 @@ function followBorder(openerId, state) {
         return;
     }
     let { win } = state;
-    if (frame.hidden) {
+    const bounds = frame.hidden ? null : borderBounds(frame.bounds);
+    // The teacher brought the meeting window back over the shared one: the frame would sit on top of it.
+    if (!bounds || meetingCovers(openerId, bounds)) {
         if (win && !win.isDestroyed() && win.isVisible()) win.hide();
         return;
     }
-    const bounds = borderBounds(frame.bounds);
     const key = `${bounds.x},${bounds.y},${bounds.width},${bounds.height}`;
     if (!win || win.isDestroyed()) {
         win = makeBorder(bounds);
