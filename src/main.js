@@ -3,7 +3,8 @@
 //  - its own share picker (screens and windows) and no browser "Stop sharing / Hide" bar,
 //  - while sharing the meeting window minimizes; the "You are screen sharing" pill/toolbar, the
 //    annotation toolbar and a small video window float on top,
-//  - annotations drawn on a see-through layer (with Zoom's green border) over the shared screen,
+//  - annotations drawn on a see-through layer (with Zoom's green border) over the shared screen; a
+//    shared window gets the green border too, following it (Windows),
 //  - liveclass:// links: "Start LiveClass" on the website opens the meeting straight in the app.
 //  - Participants and Chat open as windows of their own over the shared screen, like Zoom's.
 //  - Save (annotations) writes straight to Documents/LiveClass, one folder per meeting, no dialog.
@@ -478,6 +479,7 @@ function wireContents(contents) {
         [...FLOATING.map((name) => kids[name]), kids.overlay].forEach((w) => { if (w && !w.isDestroyed()) w.close(); });
         children.delete(id);
         shares.delete(id);
+        stopBorder(id);
         // A page reloaded mid-share never says the share ended.
         if (sharingPages.has(id)) {
             try {
@@ -588,7 +590,12 @@ async function pickShare(request, callback) {
         if (event.sender !== picker.webContents) return;
         const source = choice && sources.find((s) => s.id === choice.id);
         if (source) {
-            shares.set(contents.id, { type: source.id.startsWith('screen:') ? 'screen' : 'window', displayId: source.display_id || '' });
+            const type = source.id.startsWith('screen:') ? 'screen' : 'window';
+            // Windows ids are 'window:<HWND>:<n>': the green border follows that window.
+            const hwnd = type === 'window' && process.platform === 'win32' ? Number(source.id.split(':')[1]) || 0 : 0;
+            shares.set(contents.id, { type, displayId: source.display_id || '', hwnd });
+            // A New Share while sharing moves the border (or drops it for a screen).
+            updateBorder(contents.id);
             answer({ video: source, ...(choice.audio && process.platform === 'win32' ? { audio: 'loopback' } : {}) });
         } else {
             answer({});
@@ -620,6 +627,157 @@ async function pickShare(request, callback) {
     });
     picker.loadFile(path.join(__dirname, 'picker.html'));
     return undefined;
+}
+
+// ---- Zoom's green border around a shared window (Windows) ---------------------------------------
+// Sharing one window, Zoom frames it in green so the teacher sees what students get. The frame is a
+// click-through window of its own that follows the shared one. Where another app's window is takes
+// Win32 (koffi); without koffi (not installed, macOS) there is simply no frame.
+const BORDER_WIDTH = 4;
+const BORDER_POLL_MS = 200;
+const DWMWA_EXTENDED_FRAME_BOUNDS = 9;
+const DWMWA_CLOAKED = 14;
+const BORDER_PAGE = `data:text/html;charset=utf-8,${encodeURIComponent('<!doctype html><html><head><meta charset="utf-8"><style>'
+    + 'html,body{margin:0;height:100%;overflow:hidden;background:transparent}'
+    + `body{box-sizing:border-box;border:${BORDER_WIDTH}px solid #23d959}</style></head><body></body></html>`)}`;
+
+// Loaded on first use only: an app installed without koffi still runs.
+let win32 = null;
+const loadWin32 = () => {
+    if (win32 !== null) return win32;
+    win32 = false;
+    if (process.platform !== 'win32') return win32;
+    let dwmapi;
+    try {
+        const koffi = require('koffi');
+        const user32 = koffi.load('user32.dll');
+        dwmapi = koffi.load('dwmapi.dll');
+        koffi.struct('LC_RECT', { left: 'int32_t', top: 'int32_t', right: 'int32_t', bottom: 'int32_t' });
+        win32 = {
+            isWindow: user32.func('int __stdcall IsWindow(intptr_t hWnd)'),
+            isIconic: user32.func('int __stdcall IsIconic(intptr_t hWnd)'),
+            isVisible: user32.func('int __stdcall IsWindowVisible(intptr_t hWnd)'),
+            windowRect: user32.func('int __stdcall GetWindowRect(intptr_t hWnd, _Out_ LC_RECT *lpRect)'),
+            frameBounds: dwmapi.func('long __stdcall DwmGetWindowAttribute(intptr_t hwnd, uint32_t dwAttribute, _Out_ LC_RECT *pvAttribute, uint32_t cbAttribute)'),
+            cloaked: () => -1
+        };
+    } catch (e) {
+        win32 = false;
+        return win32;
+    }
+    // The same call again for a DWORD answer (cloaked or not); without it only that check is lost.
+    try {
+        win32.cloaked = dwmapi.func('long __stdcall DwmGetWindowAttribute(intptr_t hwnd, uint32_t dwAttribute, _Out_ uint32_t *pvAttribute, uint32_t cbAttribute)');
+    } catch (e) {
+        win32.cloaked = () => -1;
+    }
+    return win32;
+};
+
+// Where the window is on screen (DIP); { hidden } while it is minimized, hidden or on another virtual
+// desktop; null once it is gone.
+const windowFrame = (hwnd) => {
+    const api = loadWin32();
+    if (!api || !api.isWindow(hwnd)) return null;
+    if (api.isIconic(hwnd) || !api.isVisible(hwnd)) return { hidden: true };
+    // Cloaked: on another virtual desktop (IsWindowVisible still says yes).
+    const cloaked = [0];
+    if (api.cloaked(hwnd, DWMWA_CLOAKED, cloaked, 4) === 0 && cloaked[0]) return { hidden: true };
+    // The extended frame leaves out the invisible resize margins GetWindowRect counts (RECT: 16 bytes).
+    const r = {};
+    if (api.frameBounds(hwnd, DWMWA_EXTENDED_FRAME_BOUNDS, r, 16) !== 0 && !api.windowRect(hwnd, r)) return { hidden: true };
+    const px = { x: r.left, y: r.top, width: r.right - r.left, height: r.bottom - r.top };
+    if (!(px.width > 0 && px.height > 0)) return { hidden: true };
+    // Win32 gives physical pixels; windows are placed in DIP.
+    return { bounds: screen.screenToDipRect(null, px) };
+};
+
+// The frame goes just outside the window, kept on its screen (a maximized window's frame would
+// otherwise be off the edges).
+const borderBounds = (b) => {
+    const area = screen.getDisplayMatching(b).bounds;
+    const left = Math.round(Math.max(area.x, b.x - BORDER_WIDTH));
+    const top = Math.round(Math.max(area.y, b.y - BORDER_WIDTH));
+    const right = Math.round(Math.min(area.x + area.width, b.x + b.width + BORDER_WIDTH));
+    const bottom = Math.round(Math.min(area.y + area.height, b.y + b.height + BORDER_WIDTH));
+    return { x: left, y: top, width: Math.max(right - left, 1), height: Math.max(bottom - top, 1) };
+};
+
+const makeBorder = (bounds) => {
+    const win = new BrowserWindow({
+        ...bounds,
+        frame: false, transparent: true, backgroundColor: '#00000000', hasShadow: false, focusable: false,
+        resizable: false, movable: false, minimizable: false, maximizable: false, fullscreenable: false,
+        skipTaskbar: true, enableLargerThanScreen: true, show: false, title: 'LiveClass',
+        webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false, backgroundThrottling: false }
+    });
+    // Only a picture: clicks go through to the shared window, and students never see it.
+    win.setIgnoreMouseEvents(true);
+    win.setAlwaysOnTop(true, 'screen-saver');
+    win.setContentProtection(true);
+    win.loadURL(BORDER_PAGE);
+    return win;
+};
+
+// Meeting window id -> { hwnd, win, timer, key } while its share is a window.
+const borders = new Map();
+
+function stopBorder(openerId) {
+    const state = borders.get(openerId);
+    if (!state) return;
+    borders.delete(openerId);
+    clearInterval(state.timer);
+    if (state.win && !state.win.isDestroyed()) state.win.close();
+}
+
+// Windows doesn't tell us when another app's window moves, so the frame looks every 200 ms.
+function followBorder(openerId, state) {
+    if (borders.get(openerId) !== state) return;
+    let frame = null;
+    try {
+        frame = windowFrame(state.hwnd);
+    } catch (e) {
+        frame = null;
+    }
+    // The shared window was closed (the share ends with it).
+    if (!frame) {
+        stopBorder(openerId);
+        return;
+    }
+    let { win } = state;
+    if (frame.hidden) {
+        if (win && !win.isDestroyed() && win.isVisible()) win.hide();
+        return;
+    }
+    const bounds = borderBounds(frame.bounds);
+    const key = `${bounds.x},${bounds.y},${bounds.width},${bounds.height}`;
+    if (!win || win.isDestroyed()) {
+        win = makeBorder(bounds);
+        state.win = win;
+        state.key = key;
+    } else if (state.key !== key) {
+        state.key = key;
+        win.setBounds(bounds);
+    }
+    if (!win.isVisible()) {
+        win.showInactive();
+        // The share toolbars stay above the frame.
+        raiseFloating(openerId);
+    }
+}
+
+// On every change of share: a frame while a window is shared, none otherwise.
+function updateBorder(openerId) {
+    const share = shares.get(openerId);
+    const hwnd = sharingPages.has(openerId) && share && share.type === 'window' ? share.hwnd || 0 : 0;
+    const current = borders.get(openerId);
+    if (current && current.hwnd === hwnd) return;
+    stopBorder(openerId);
+    if (!hwnd || !loadWin32()) return;
+    const state = { hwnd, win: null, timer: null, key: '' };
+    borders.set(openerId, state);
+    state.timer = setInterval(() => followBorder(openerId, state), BORDER_POLL_MS);
+    followBorder(openerId, state);
 }
 
 // ---- Bridge for the meeting page (window.satDesktop, see preload.js) -----------------------------
@@ -656,6 +814,7 @@ ipcMain.on('lc:sharing', (event, on) => {
         if (win.isMinimized()) win.restore();
         win.focus();
     }
+    updateBorder(event.sender.id);
 });
 
 // Zoom's "Hide floating meeting controls" comes back with Ctrl+Alt+Shift+H; the shortcut belongs to

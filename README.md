@@ -9,7 +9,8 @@ adds what a browser can't do:
 - **Zoom's sharing layout**: the meeting window minimizes when sharing starts and comes back when
   it stops; a "You are screen sharing · Stop Share" pill sits at the top and opens into the full
   toolbar (mute, video, participants, New Share, pause, annotate, chat, more) on hover; a small
-  video window shows who's talking; a green border marks the shared screen.
+  video window shows who's talking; a green border marks the shared screen, or follows the shared
+  window on Windows (it needs the `koffi` dependency; without it a shared window has no border).
 - **Annotate anywhere** with Zoom's toolbar (mouse, text, pen/highlighter/line/arrow/rectangle/oval,
   stamps, spotlight, eraser, colour and thickness, undo/redo, clear, save): when a whole screen is
   shared, a see-through drawing layer covers it, so the teacher draws on any program. The mouse goes
