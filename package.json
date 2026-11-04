@@ -1,7 +1,7 @@
 {
   "name": "liveclass-desktop",
   "productName": "LiveClass",
-  "version": "1.6.0",
+  "version": "1.6.1",
   "description": "LiveClass desktop app for teachers: share anything and annotate anywhere on the screen",
   "author": "SATAREA",
   "private": true,
@@ -72,7 +72,8 @@
         "NSCameraUsageDescription": "LiveClass uses the camera for your video in class.",
         "NSMicrophoneUsageDescription": "LiveClass uses the microphone so students can hear you."
       },
-      "identity": "-"
+      "identity": "-",
+      "hardenedRuntime": false
     },
     "protocols": [
       {

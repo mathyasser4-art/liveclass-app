@@ -60,10 +60,11 @@ jobs:
       - run: npm ci
       - run: npx electron-builder ${{ matrix.target }} --publish never
         env:
-          # No certificates: Windows is unsigned, the Mac app gets an ad-hoc signature.
+          # No certificates: Windows is unsigned, the Mac app gets an ad-hoc signature (no hardened
+          # runtime, which only notarization needs and which would block Electron, camera and mic).
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
       - if: runner.os == 'macOS'
-        run: codesign -dv dist/mac-universal/LiveClass.app
+        run: codesign -dv dist/mac-universal/LiveClass.app && codesign --verify --deep --strict dist/mac-universal/LiveClass.app
       - uses: actions/upload-artifact@v4
         with:
           name: installer-${{ runner.os }}
