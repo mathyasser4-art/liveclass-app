@@ -1,7 +1,7 @@
 {
   "name": "liveclass-desktop",
   "productName": "LiveClass",
-  "version": "1.5.1",
+  "version": "1.6.0",
   "description": "LiveClass desktop app for teachers: share anything and annotate anywhere on the screen",
   "author": "SATAREA",
   "private": true,
@@ -44,7 +44,7 @@
           ]
         }
       ],
-      "artifactName": "LiveClass-Setup-${version}.${ext}"
+      "artifactName": "LiveClass-Setup.${ext}"
     },
     "nsis": {
       "oneClick": true,
@@ -67,11 +67,12 @@
         "!node_modules/@koromix{,/**/*}"
       ],
       "category": "public.app-category.education",
-      "artifactName": "LiveClass-${version}.${ext}",
+      "artifactName": "LiveClass.${ext}",
       "extendInfo": {
         "NSCameraUsageDescription": "LiveClass uses the camera for your video in class.",
         "NSMicrophoneUsageDescription": "LiveClass uses the microphone so students can hear you."
-      }
+      },
+      "identity": "-"
     },
     "protocols": [
       {
@@ -80,6 +81,11 @@
           "liveclass"
         ]
       }
-    ]
+    ],
+    "publish": null
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/mathyasser4-art/liveclass-app.git"
   }
 }

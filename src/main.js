@@ -21,8 +21,11 @@ const fs = require('fs');
 const SITES = [
     { id: 'satarea', name: 'SATAREA', url: 'https://satarea.tech' },
     { id: 'mrshahin', name: 'Mr. Shahin', url: 'https://mrshahin.com' },
-    { id: 'ais', name: 'AIS', url: 'https://ais.satarea.tech' }
+    { id: 'ais', name: 'AIS', url: 'https://ais.satarea.tech' },
+    { id: 'igcse', name: 'IGCSE', url: 'https://new-igcse-frontend.vercel.app' }
 ];
+// Exact host names (not all of vercel.app, which anyone can publish on).
+const OUR_HOSTS = SITES.map((s) => new URL(s.url).hostname);
 // Development: `npm start -- --site=http://localhost:3007` opens any site.
 const devSite = (process.argv.find((a) => a.startsWith('--site=')) || '').slice(7);
 // Development runs get their own profile, so they work next to an installed LiveClass.
@@ -70,7 +73,7 @@ const isOurs = (url) => {
     try {
         const u = new URL(url);
         if (devSite && u.origin === new URL(devSite).origin) return true;
-        return u.protocol === 'https:' && /(^|\.)(satarea\.tech|mrshahin\.com)$/.test(u.hostname);
+        return u.protocol === 'https:' && (/(^|\.)(satarea\.tech|mrshahin\.com)$/.test(u.hostname) || OUR_HOSTS.includes(u.hostname));
     } catch (e) {
         return false;
     }

@@ -1,0 +1,90 @@
+name: Release
+
+# Builds the Windows and Mac installers on GitHub's own machines and publishes them as a release.
+# Runs when package.json's version is new (no v<version> release yet), or by hand (Actions → Release →
+# Run workflow), which rebuilds the current version. The website links to
+# releases/latest/download/LiveClass-Setup.exe and releases/latest/download/LiveClass.dmg.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.v.outputs.tag }}
+      build: ${{ steps.v.outputs.build }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: v
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="v$(node -p "require('./package.json').version")"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] || ! gh release view "$tag" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            echo "build=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "build=false" >> "$GITHUB_OUTPUT"
+            echo "$tag is already released; bump the version in package.json for a new one."
+          fi
+
+  build:
+    needs: version
+    if: needs.version.outputs.build == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target: --win
+            file: dist/LiveClass-Setup.exe
+          - os: macos-latest
+            target: --mac
+            file: dist/LiveClass.dmg
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npx electron-builder ${{ matrix.target }} --publish never
+        env:
+          # No certificates: Windows is unsigned, the Mac app gets an ad-hoc signature.
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      - if: runner.os == 'macOS'
+        run: codesign -dv dist/mac-universal/LiveClass.app
+      - uses: actions/upload-artifact@v4
+        with:
+          name: installer-${{ runner.os }}
+          path: ${{ matrix.file }}
+          if-no-files-found: error
+
+  release:
+    needs: [version, build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: out
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.version.outputs.tag }}
+          name: LiveClass ${{ needs.version.outputs.tag }}
+          body_path: RELEASE_NOTES.md
+          make_latest: true
+          files: |
+            out/LiveClass-Setup.exe
+            out/LiveClass.dmg

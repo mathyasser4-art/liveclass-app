@@ -1,0 +1,25 @@
+## Download
+
+- **Windows:** [LiveClass-Setup.exe](https://github.com/mathyasser4-art/liveclass-app/releases/latest/download/LiveClass-Setup.exe)
+- **Mac:** [LiveClass.dmg](https://github.com/mathyasser4-art/liveclass-app/releases/latest/download/LiveClass.dmg)
+
+On the first launch, choose your platform (SATAREA, Mr. Shahin, AIS or IGCSE) and sign in. After that,
+"Start LiveClass" on the website opens your class in the app.
+
+## The first time you install
+
+The app is not signed with a certificate yet, so your computer asks before it opens it:
+
+- **Windows**: "Windows protected your PC" → click **More info** → **Run anyway**.
+- **Mac**: open the .dmg and drag LiveClass into Applications. Open it once; when the Mac says it
+  can't check it, go to **System Settings → Privacy & Security**, scroll down and click
+  **Open Anyway**. The first screen share asks for **Screen Recording** permission there too.
+
+## تنزيل التطبيق
+
+- **ويندوز:** [LiveClass-Setup.exe](https://github.com/mathyasser4-art/liveclass-app/releases/latest/download/LiveClass-Setup.exe)
+- **ماك:** [LiveClass.dmg](https://github.com/mathyasser4-art/liveclass-app/releases/latest/download/LiveClass.dmg)
+
+عند فتح التطبيق أول مرة اختر منصتك وسجّل الدخول.
+- **ويندوز:** إذا ظهرت رسالة "Windows protected your PC" اضغط **More info** ثم **Run anyway**.
+- **ماك:** اسحب LiveClass إلى Applications، ثم من **System Settings → Privacy & Security** اضغط **Open Anyway**.
