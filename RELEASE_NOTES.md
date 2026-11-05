@@ -1,3 +1,10 @@
+## New in 1.6.2
+
+- IGCSE opens on its new address, **igschools.tech**, and "Start LiveClass" on igschools.tech opens your
+  class in the app.
+- If you already use IGCSE in the app, sign in once more after updating: the new address has its own
+  sign-in.
+
 ## Download
 
 - **Windows:** [LiveClass-Setup.exe](https://github.com/mathyasser4-art/liveclass-app/releases/latest/download/LiveClass-Setup.exe)
@@ -14,6 +21,11 @@ The app is not signed with a certificate yet, so your computer asks before it op
 - **Mac**: open the .dmg and drag LiveClass into Applications. Open it once; when the Mac says it
   can't check it, go to **System Settings → Privacy & Security**, scroll down and click
   **Open Anyway**. The first screen share asks for **Screen Recording** permission there too.
+
+## الجديد في 1.6.2
+
+- منصة IGCSE تفتح الآن على عنوانها الجديد **igschools.tech**، وزر "Start LiveClass" على igschools.tech يفتح حصتك في التطبيق.
+- إذا كنت تستخدم IGCSE في التطبيق، سجّل الدخول مرة أخرى بعد التحديث، لأن العنوان الجديد له تسجيل دخول خاص به.
 
 ## تنزيل التطبيق
 

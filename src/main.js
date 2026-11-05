@@ -22,10 +22,13 @@ const SITES = [
     { id: 'satarea', name: 'SATAREA', url: 'https://satarea.tech' },
     { id: 'mrshahin', name: 'Mr. Shahin', url: 'https://mrshahin.com' },
     { id: 'ais', name: 'AIS', url: 'https://ais.satarea.tech' },
-    { id: 'igcse', name: 'IGCSE', url: 'https://new-igcse-frontend.vercel.app' }
+    // IGCSE's own domain since 1.6.2. Its www. address and its first address (still online, and where
+    // links from teachers who still use it come from) open in the app too.
+    { id: 'igcse', name: 'IGCSE', url: 'https://igschools.tech', also: ['https://www.igschools.tech', 'https://new-igcse-frontend.vercel.app'] }
 ];
+const addressesOf = (site) => [site.url, ...(site.also || [])];
 // Exact host names (not all of vercel.app, which anyone can publish on).
-const OUR_HOSTS = SITES.map((s) => new URL(s.url).hostname);
+const OUR_HOSTS = SITES.flatMap((s) => addressesOf(s).map((url) => new URL(url).hostname));
 // Development: `npm start -- --site=http://localhost:3007` opens any site.
 const devSite = (process.argv.find((a) => a.startsWith('--site=')) || '').slice(7);
 // Development runs get their own profile, so they work next to an installed LiveClass.
@@ -1353,7 +1356,7 @@ function openLink(link) {
     }
     if (!target || !isOurs(target)) return;
     // The first link also picks the site for the main window.
-    const site = SITES.find((s) => new URL(s.url).origin === new URL(target).origin);
+    const site = SITES.find((s) => addressesOf(s).some((url) => new URL(url).origin === new URL(target).origin));
     if (site && !readSettings().site) writeSettings({ ...readSettings(), site: site.id });
     const existing = BrowserWindow.getAllWindows().find((w) => w.lcMeeting && !w.isDestroyed());
     if (existing) {
