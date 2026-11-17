@@ -12,6 +12,8 @@ contextBridge.exposeInMainWorld('satDesktop', {
     platform: process.platform,
     // 'meeting' in a meeting window (its "back" closes the window).
     windowKind: arg('lc-window'),
+    // 1.7.0 on: a site with a home screen (/app) shows only it and the meetings in the app.
+    appHome: true,
     // Minimizes the meeting window while sharing, and brings it back after.
     setSharing: (on) => ipcRenderer.send('lc:sharing', !!on),
     focusMeeting: () => ipcRenderer.send('lc:focus-meeting'),

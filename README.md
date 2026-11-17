@@ -21,6 +21,11 @@ adds what a browser can't do:
   through the layer unless a tool is picked. When one window is shared, drawing happens on its
   picture in the meeting window.
 - **Platforms**: SATAREA, Mr. Shahin, AIS and IGCSE (chosen on first launch).
+- **Home screen (IGCSE, 1.7.0 on)**: a site with a `home` (IGCSE's `/app`) opens on it: sign in,
+  your classes, Start. The app shows only that page and the meetings; the site's other pages open in
+  the browser, the windows keep the name LiveClass, and the home screen comes back after a class.
+- **Update notice**: on launch (and LiveClass → Check for updates…) the app compares itself with the
+  latest GitHub release and offers the download.
 - **Opens from the website**: "Start LiveClass" on the site (Windows/Mac) opens a
   `liveclass://open?url=…` link, so the meeting opens straight in the app (signed in once with the
   app's own login). Set `REACT_APP_LIVECLASS_DOWNLOAD_URL` on the website to show a download link.

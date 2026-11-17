@@ -1,9 +1,10 @@
-## New in 1.6.2
+## New in 1.7.0
 
-- IGCSE opens on its new address, **igschools.tech**, and "Start LiveClass" on igschools.tech opens your
-  class in the app.
-- If you already use IGCSE in the app, sign in once more after updating: the new address has its own
-  sign-in.
+- **IGCSE works like the Zoom app.** LiveClass opens its own home screen: sign in, see your classes,
+  press **Start**. No website pages inside the app any more, and the windows are called LiveClass.
+- After a class, the home screen comes back.
+- LiveClass tells you when a new version is out (and **LiveClass → Check for updates…**).
+- A link LiveClass can't open now says so, instead of doing nothing.
 
 ## Download
 
@@ -22,10 +23,12 @@ The app is not signed with a certificate yet, so your computer asks before it op
   can't check it, go to **System Settings → Privacy & Security**, scroll down and click
   **Open Anyway**. The first screen share asks for **Screen Recording** permission there too.
 
-## الجديد في 1.6.2
+## الجديد في 1.7.0
 
-- منصة IGCSE تفتح الآن على عنوانها الجديد **igschools.tech**، وزر "Start LiveClass" على igschools.tech يفتح حصتك في التطبيق.
-- إذا كنت تستخدم IGCSE في التطبيق، سجّل الدخول مرة أخرى بعد التحديث، لأن العنوان الجديد له تسجيل دخول خاص به.
+- **منصة IGCSE تعمل مثل تطبيق Zoom.** يفتح LiveClass شاشته الرئيسية الخاصة: سجّل الدخول، وشاهد حصصك، واضغط **ابدأ**. لا تظهر صفحات الموقع داخل التطبيق بعد الآن.
+- بعد انتهاء الحصة تعود الشاشة الرئيسية.
+- يخبرك LiveClass عند توفر إصدار جديد (ومن القائمة **LiveClass ← Check for updates…**).
+- الرابط الذي لا يستطيع LiveClass فتحه يعرض الآن رسالة بدلًا من ألا يحدث شيء.
 
 ## تنزيل التطبيق
 

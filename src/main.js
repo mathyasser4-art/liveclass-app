@@ -6,14 +6,16 @@
 //  - annotations drawn on a see-through layer (with Zoom's green border) over the shared screen; a
 //    shared window gets the green border too, following it (Windows),
 //  - liveclass:// links: "Start LiveClass" on the website opens the meeting straight in the app.
+//  - Sites with a home screen (IGCSE's /app) show only it and their meetings, like the Zoom app: no
+//    website pages; after a class the home screen comes back. The app says when an update is out.
 //  - Participants and Chat open as windows of their own over the shared screen, like Zoom's.
 //  - Save (annotations) writes straight to Documents/LiveClass, one folder per meeting, no dialog.
 // The floating windows, the drawing layer, the share picker and (while sharing) the meeting window are
 // left out of the screen capture: students never see LiveClass itself, and they get the strokes over
 // the data channel (as they do today), so nothing is drawn twice.
 const {
-    app, BrowserWindow, Menu, desktopCapturer, globalShortcut, ipcMain, nativeImage, screen, session, shell, systemPreferences,
-    webContents
+    app, BrowserWindow, Menu, desktopCapturer, dialog, globalShortcut, ipcMain, nativeImage, net, screen, session, shell,
+    systemPreferences, webContents
 } = require('electron');
 const path = require('path');
 const fs = require('fs');
@@ -24,9 +26,34 @@ const SITES = [
     { id: 'ais', name: 'AIS', url: 'https://ais.satarea.tech' },
     // IGCSE's own domain since 1.6.2. Its www. address and its first address (still online, and where
     // links from teachers who still use it come from) open in the app too.
-    { id: 'igcse', name: 'IGCSE', url: 'https://igschools.tech', also: ['https://www.igschools.tech', 'https://new-igcse-frontend.vercel.app'] }
+    // home: the site's own LiveClass home screen (sign in, your classes, Start). The app shows it
+    // instead of the website, and only it and the meetings (since 1.7.0).
+    { id: 'igcse', name: 'IGCSE', url: 'https://igschools.tech', also: ['https://www.igschools.tech', 'https://new-igcse-frontend.vercel.app'], home: '/app' }
 ];
 const addressesOf = (site) => [site.url, ...(site.also || [])];
+// The site an address belongs to (null for none of ours).
+const siteOfUrl = (url) => {
+    try {
+        const { origin } = new URL(url);
+        return SITES.find((s) => addressesOf(s).some((a) => new URL(a).origin === origin)) || null;
+    } catch (e) {
+        return null;
+    }
+};
+// Where the main window opens a site: its home screen, or the website for sites without one.
+const startOf = (site) => (site ? new URL(site.home || '/', site.url).href : '');
+// A site with a home screen keeps only it and its meetings in the app; its other pages open in the
+// teacher's browser.
+const APP_PAGES = /^\/(app|live)(\/|$)/;
+const keptInApp = (url) => {
+    const site = siteOfUrl(url);
+    if (!site || !site.home) return true;
+    try {
+        return APP_PAGES.test(new URL(url).pathname);
+    } catch (e) {
+        return false;
+    }
+};
 // Exact host names (not all of vercel.app, which anyone can publish on).
 const OUR_HOSTS = SITES.flatMap((s) => addressesOf(s).map((url) => new URL(url).hostname));
 // Development: `npm start -- --site=http://localhost:3007` opens any site.
@@ -69,7 +96,8 @@ const writeSettings = (value) => {
         // Without a settings file the site is asked again next time.
     }
 };
-const siteUrl = () => devSite || (SITES.find((s) => s.id === readSettings().site) || {}).url || '';
+const chosenSite = () => SITES.find((s) => s.id === readSettings().site) || null;
+const siteUrl = () => devSite || startOf(chosenSite());
 
 // Our sites get the app bridge, camera, microphone and screen, and stay inside the app.
 const isOurs = (url) => {
@@ -451,6 +479,10 @@ function wireContents(contents) {
                 }
             };
         }
+        if (isOurs(url) && !keptInApp(url)) {
+            openOutside(url);
+            return { action: 'deny' };
+        }
         if (isOurs(url)) {
             const meeting = frameName === MEETING && BrowserWindow.getAllWindows().find((w) => w.lcMeeting && !w.isDestroyed());
             if (meeting) {
@@ -478,6 +510,7 @@ function wireContents(contents) {
             win.setMenuBarVisibility(false);
             wireContents(win.webContents);
             wireWindowState(win);
+            if (win.lcMeeting) win.on('closed', () => backHome(url));
         }
         return undefined;
     });
@@ -1337,7 +1370,7 @@ ipcMain.on('site:choose', (event, id) => {
     const site = SITES.find((s) => s.id === id);
     if (!site || !event.senderFrame || !event.senderFrame.url.startsWith('file:')) return;
     writeSettings({ ...readSettings(), site: site.id });
-    if (mainWindow) mainWindow.loadURL(site.url);
+    if (mainWindow) mainWindow.loadURL(startOf(site));
 });
 ipcMain.handle('site:list', () => ({ sites: SITES, current: readSettings().site || '' }));
 
@@ -1354,9 +1387,12 @@ function openLink(link) {
     } catch (e) {
         return;
     }
-    if (!target || !isOurs(target)) return;
+    if (!target || !isOurs(target)) {
+        notOurLink();
+        return;
+    }
     // The first link also picks the site for the main window.
-    const site = SITES.find((s) => addressesOf(s).some((url) => new URL(url).origin === new URL(target).origin));
+    const site = siteOfUrl(target);
     if (site && !readSettings().site) writeSettings({ ...readSettings(), site: site.id });
     const existing = BrowserWindow.getAllWindows().find((w) => w.lcMeeting && !w.isDestroyed());
     if (existing) {
@@ -1370,7 +1406,82 @@ function openLink(link) {
     win.setMenuBarVisibility(false);
     wireContents(win.webContents);
     wireWindowState(win);
+    win.on('closed', () => backHome(target));
     win.loadURL(target);
+}
+
+// Before 1.7.0 a link the app couldn't open did nothing at all (the teacher saw nothing happen).
+function notOurLink() {
+    dialog.showMessageBox({
+        type: 'warning',
+        title: 'LiveClass',
+        message: "This link can't open in LiveClass",
+        detail: 'It is not a class link of SATAREA, Mr. Shahin, AIS or IGCSE. If it came from your school '
+            + "website, update LiveClass (LiveClass → Check for updates…).\n\nهذا الرابط لا يفتح في LiveClass. إذا كان من موقع مدرستك، حدّث التطبيق.",
+        buttons: ['OK']
+    }).then(() => {
+        if (!BrowserWindow.getAllWindows().some((w) => !w.isDestroyed())) createMainWindow();
+    }).catch(() => null);
+}
+
+// Like Zoom, the home screen comes back after a class (sites with one). Not while quitting.
+let quitting = false;
+function backHome(meetingUrl) {
+    if (quitting) return;
+    const site = siteOfUrl(meetingUrl);
+    if (!site || !site.home) return;
+    if (BrowserWindow.getAllWindows().some((w) => w.lcMeeting && !w.isDestroyed())) return;
+    if (!mainWindow) {
+        createMainWindow();
+        return;
+    }
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.show();
+    mainWindow.focus();
+}
+
+// ---- Updates ------------------------------------------------------------------------------------
+// The app doesn't update itself (it isn't code-signed yet), so it says when a new version is out
+// and opens its download. Teachers on an old version otherwise never learn that a site needs a newer one.
+const REPO = 'mathyasser4-art/liveclass-app';
+const RELEASES = `https://github.com/${REPO}/releases/latest`;
+const INSTALLER = { win32: `${RELEASES}/download/LiveClass-Setup.exe`, darwin: `${RELEASES}/download/LiveClass.dmg` };
+// '1.10.0' > '1.9.2'
+const isNewer = (latest, current) => {
+    const parts = (v) => String(v).replace(/^v/, '').split('.').map((n) => parseInt(n, 10) || 0);
+    const a = parts(latest);
+    const b = parts(current);
+    for (let i = 0; i < Math.max(a.length, b.length); i += 1) {
+        if ((a[i] || 0) !== (b[i] || 0)) return (a[i] || 0) > (b[i] || 0);
+    }
+    return false;
+};
+async function checkForUpdate(manual) {
+    let latest = '';
+    try {
+        const res = await net.fetch(`https://api.github.com/repos/${REPO}/releases/latest`, {
+            headers: { Accept: 'application/vnd.github+json', 'User-Agent': 'LiveClass-desktop' }
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        latest = String((await res.json()).tag_name || '').replace(/^v/, '');
+    } catch (e) {
+        if (manual) dialog.showMessageBox({ type: 'error', title: 'LiveClass', message: "Couldn't check for updates", detail: 'Check your internet connection and try again.', buttons: ['OK'] });
+        return;
+    }
+    if (!latest || !isNewer(latest, app.getVersion())) {
+        if (manual) dialog.showMessageBox({ type: 'info', title: 'LiveClass', message: 'LiveClass is up to date', detail: `You have version ${app.getVersion()}.`, buttons: ['OK'] });
+        return;
+    }
+    const { response } = await dialog.showMessageBox({
+        type: 'info',
+        title: 'LiveClass',
+        message: `A new LiveClass is available (${latest})`,
+        detail: `You have ${app.getVersion()}. Download it, close LiveClass and install it.\n\nيتوفر إصدار جديد من LiveClass. نزّله ثم أغلق التطبيق وثبّته.`,
+        buttons: ['Download', 'Later'],
+        defaultId: 0,
+        cancelId: 1
+    });
+    if (response === 0) shell.openExternal(INSTALLER[process.platform] || RELEASES);
 }
 
 // ---- App ----------------------------------------------------------------------------------------
@@ -1381,6 +1492,7 @@ function buildMenu() {
             label: 'LiveClass',
             submenu: [
                 { label: 'Change site…', click: chooseSite, enabled: !devSite },
+                { label: 'Check for updates…', click: () => checkForUpdate(true) },
                 { role: 'reload' },
                 ...(app.isPackaged ? [] : [{ role: 'toggleDevTools' }]),
                 { type: 'separator' },
@@ -1414,6 +1526,12 @@ if (!app.requestSingleInstanceLock()) {
         return mainWindow.focus();
     });
 
+    // The windows are LiveClass's, not the website's: the site's page titles never replace their names.
+    app.on('browser-window-created', (event, win) => {
+        win.on('page-title-updated', (e) => e.preventDefault());
+    });
+    app.on('before-quit', () => { quitting = true; });
+
     app.whenReady().then(() => {
         const ses = session.defaultSession;
         const allowed = ['media', 'display-capture', 'clipboard-sanitized-write', 'clipboard-read', 'fullscreen', 'notifications'];
@@ -1435,11 +1553,13 @@ if (!app.requestSingleInstanceLock()) {
         else createMainWindow();
         pendingLink = null;
         app.on('activate', () => { if (!mainWindow) createMainWindow(); });
+        if (app.isPackaged) setTimeout(() => checkForUpdate(false), 4000);
     });
 
     app.on('will-quit', () => globalShortcut.unregisterAll());
 
     app.on('window-all-closed', () => {
-        if (process.platform !== 'darwin') app.quit();
+        // The home screen opening as a class closes (backHome) keeps the app running.
+        if (process.platform !== 'darwin' && !BrowserWindow.getAllWindows().length) app.quit();
     });
 }
