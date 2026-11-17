@@ -6,8 +6,9 @@
 //  - annotations drawn on a see-through layer (with Zoom's green border) over the shared screen; a
 //    shared window gets the green border too, following it (Windows),
 //  - liveclass:// links: "Start LiveClass" on the website opens the meeting straight in the app.
-//  - Sites with a home screen (IGCSE's /app) show only it and their meetings, like the Zoom app: no
-//    website pages; after a class the home screen comes back. The app says when an update is out.
+//  - Like the Zoom app, it is only the class: it opens when the teacher presses Start on any of our
+//    websites, already signed in (the website's one-time code), and closes after the class. No
+//    platform to choose, no website pages. It says when an update is out.
 //  - Participants and Chat open as windows of their own over the shared screen, like Zoom's.
 //  - Save (annotations) writes straight to Documents/LiveClass, one folder per meeting, no dialog.
 // The floating windows, the drawing layer, the share picker and (while sharing) the meeting window are
@@ -26,37 +27,21 @@ const SITES = [
     { id: 'ais', name: 'AIS', url: 'https://ais.satarea.tech' },
     // IGCSE's own domain since 1.6.2. Its www. address and its first address (still online, and where
     // links from teachers who still use it come from) open in the app too.
-    // home: the site's own LiveClass home screen (sign in, your classes, Start). The app shows it
-    // instead of the website, and only it and the meetings (since 1.7.0).
-    { id: 'igcse', name: 'IGCSE', url: 'https://igschools.tech', also: ['https://www.igschools.tech', 'https://new-igcse-frontend.vercel.app'], home: '/app' }
+    { id: 'igcse', name: 'IGCSE', url: 'https://igschools.tech', also: ['https://www.igschools.tech', 'https://new-igcse-frontend.vercel.app'] }
 ];
 const addressesOf = (site) => [site.url, ...(site.also || [])];
-// The site an address belongs to (null for none of ours).
-const siteOfUrl = (url) => {
-    try {
-        const { origin } = new URL(url);
-        return SITES.find((s) => addressesOf(s).some((a) => new URL(a).origin === origin)) || null;
-    } catch (e) {
-        return null;
-    }
-};
-// Where the main window opens a site: its home screen, or the website for sites without one.
-const startOf = (site) => (site ? new URL(site.home || '/', site.url).href : '');
-// A site with a home screen keeps only it and its meetings in the app; its other pages open in the
-// teacher's browser.
-const APP_PAGES = /^\/(app|live)(\/|$)/;
+// The app shows only classes: any other page of our sites opens in the teacher's browser.
+const CLASS_PAGES = /^\/live(\/|$)/;
 const keptInApp = (url) => {
-    const site = siteOfUrl(url);
-    if (!site || !site.home) return true;
     try {
-        return APP_PAGES.test(new URL(url).pathname);
+        return CLASS_PAGES.test(new URL(url).pathname);
     } catch (e) {
         return false;
     }
 };
 // Exact host names (not all of vercel.app, which anyone can publish on).
 const OUR_HOSTS = SITES.flatMap((s) => addressesOf(s).map((url) => new URL(url).hostname));
-// Development: `npm start -- --site=http://localhost:3007` opens any site.
+// Development: `npm start -- --site=http://localhost:3007/live/<courseId>` opens a class of any site.
 const devSite = (process.argv.find((a) => a.startsWith('--site=')) || '').slice(7);
 // Development runs get their own profile, so they work next to an installed LiveClass.
 if (devSite) app.setPath('userData', path.join(app.getPath('appData'), 'LiveClass-dev'));
@@ -79,25 +64,6 @@ const CHAT = 'lc-chat';
 const PANELS = [PEOPLE, CHAT];
 const FLOATING = [BAR, BAR_TOOLS, ANNOT_BAR, VIDEOS, ...PANELS];
 const PROTOCOL = 'liveclass';
-
-// ---- Settings (the chosen site) -----------------------------------------------------------------
-const settingsFile = () => path.join(app.getPath('userData'), 'settings.json');
-const readSettings = () => {
-    try {
-        return JSON.parse(fs.readFileSync(settingsFile(), 'utf8'));
-    } catch (e) {
-        return {};
-    }
-};
-const writeSettings = (value) => {
-    try {
-        fs.writeFileSync(settingsFile(), JSON.stringify(value));
-    } catch (e) {
-        // Without a settings file the site is asked again next time.
-    }
-};
-const chosenSite = () => SITES.find((s) => s.id === readSettings().site) || null;
-const siteUrl = () => devSite || startOf(chosenSite());
 
 // Our sites get the app bridge, camera, microphone and screen, and stay inside the app.
 const isOurs = (url) => {
@@ -123,7 +89,6 @@ const openOutside = (url) => {
 const fromOurs = (event) => !!event.senderFrame && isOurs(event.senderFrame.url);
 
 // ---- Windows ------------------------------------------------------------------------------------
-let mainWindow = null;
 // Per meeting window (by webContents id): what was shared, and its floating bar / drawing layer.
 const shares = new Map();
 const children = new Map();
@@ -479,7 +444,7 @@ function wireContents(contents) {
                 }
             };
         }
-        if (isOurs(url) && !keptInApp(url)) {
+        if (isOurs(url) && !keptInApp(url) && !(devSite && url.startsWith(devSite))) {
             openOutside(url);
             return { action: 'deny' };
         }
@@ -510,7 +475,6 @@ function wireContents(contents) {
             win.setMenuBarVisibility(false);
             wireContents(win.webContents);
             wireWindowState(win);
-            if (win.lcMeeting) win.on('closed', () => backHome(url));
         }
         return undefined;
     });
@@ -555,29 +519,33 @@ function wireContents(contents) {
     });
 }
 
-function createMainWindow() {
-    mainWindow = new BrowserWindow({
-        width: 1280,
-        height: 820,
-        minWidth: 900,
-        minHeight: 600,
+// Opened by itself (not from a website): a small note saying where classes start, like Zoom without
+// a meeting. Its page is in the app; nothing loads from the internet.
+let noteWindow = null;
+function showNote() {
+    if (noteWindow && !noteWindow.isDestroyed()) {
+        if (noteWindow.isMinimized()) noteWindow.restore();
+        noteWindow.focus();
+        return;
+    }
+    noteWindow = new BrowserWindow({
+        width: 460,
+        height: 340,
+        resizable: false,
+        maximizable: false,
+        fullscreenable: false,
         title: 'LiveClass',
         icon: ICON,
         backgroundColor: '#1a1a1a',
         autoHideMenuBar: true,
-        webPreferences: appWebPreferences()
+        webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false }
     });
-    wireContents(mainWindow.webContents);
-    wireWindowState(mainWindow);
-    const url = siteUrl();
-    if (url) mainWindow.loadURL(url);
-    else mainWindow.loadFile(path.join(__dirname, 'site.html'));
-    mainWindow.on('closed', () => { mainWindow = null; });
+    noteWindow.setMenuBarVisibility(false);
+    noteWindow.loadFile(path.join(__dirname, 'note.html'));
+    noteWindow.on('closed', () => { noteWindow = null; });
 }
-
-const chooseSite = () => {
-    if (!mainWindow) return;
-    mainWindow.loadFile(path.join(__dirname, 'site.html'));
+const closeNote = () => {
+    if (noteWindow && !noteWindow.isDestroyed()) noteWindow.close();
 };
 
 // ---- Share picker (Zoom's "Select a window or an application that you want to share") -----------
@@ -1366,41 +1334,37 @@ ipcMain.on('lc:annotating', (event, mode) => {
     raiseFloating(event.sender.id);
 });
 
-ipcMain.on('site:choose', (event, id) => {
-    const site = SITES.find((s) => s.id === id);
-    if (!site || !event.senderFrame || !event.senderFrame.url.startsWith('file:')) return;
-    writeSettings({ ...readSettings(), site: site.id });
-    if (mainWindow) mainWindow.loadURL(startOf(site));
-});
-ipcMain.handle('site:list', () => ({ sites: SITES, current: readSettings().site || '' }));
-
 // ---- liveclass:// links ------------------------------------------------------------------------
-// liveclass://open?url=<https://satarea.tech/live/<courseId>>, from "Start LiveClass" on the website:
-// the meeting opens in its own window (signed in with the app's own login).
+// liveclass://open?url=<https://satarea.tech/live/<courseId>>&code=<one-time sign-in>, from "Start
+// LiveClass" on the website: the class opens in its own window, signed in as the teacher (the page
+// trades the code, given as #lc=..., for the website's sign-in).
 const linkFrom = (argv) => (argv || []).find((a) => typeof a === 'string' && a.startsWith(`${PROTOCOL}://`));
 let pendingLink = linkFrom(process.argv);
 
 function openLink(link) {
     let target;
+    let code = '';
     try {
-        target = new URL(link).searchParams.get('url');
+        const params = new URL(link).searchParams;
+        target = params.get('url');
+        code = params.get('code') || '';
     } catch (e) {
         return;
     }
-    if (!target || !isOurs(target)) {
+    if (!target || !isOurs(target) || !keptInApp(target)) {
         notOurLink();
         return;
     }
-    // The platform of the class just opened becomes the app's platform (home screen included): a
-    // teacher who once picked another one (the choice outlives reinstalling) isn't left on it.
-    const site = siteOfUrl(target);
-    if (site && !devSite && readSettings().site !== site.id) {
-        writeSettings({ ...readSettings(), site: site.id });
-        if (mainWindow && !mainWindow.isDestroyed()) mainWindow.loadURL(startOf(site));
+    let page = target;
+    if (/^[A-Za-z0-9_-]{20,64}$/.test(code)) {
+        const u = new URL(target);
+        u.hash = `lc=${code}`;
+        page = u.href;
     }
+    closeNote();
     const existing = BrowserWindow.getAllWindows().find((w) => w.lcMeeting && !w.isDestroyed());
     if (existing) {
-        if (existing.webContents.getURL() !== target) existing.loadURL(target);
+        existing.loadURL(page);
         if (existing.isMinimized()) existing.restore();
         existing.focus();
         return;
@@ -1410,8 +1374,7 @@ function openLink(link) {
     win.setMenuBarVisibility(false);
     wireContents(win.webContents);
     wireWindowState(win);
-    win.on('closed', () => backHome(target));
-    win.loadURL(target);
+    win.loadURL(page);
 }
 
 // Before 1.7.0 a link the app couldn't open did nothing at all (the teacher saw nothing happen).
@@ -1424,24 +1387,8 @@ function notOurLink() {
             + "website, update LiveClass (LiveClass → Check for updates…).\n\nهذا الرابط لا يفتح في LiveClass. إذا كان من موقع مدرستك، حدّث التطبيق.",
         buttons: ['OK']
     }).then(() => {
-        if (!BrowserWindow.getAllWindows().some((w) => !w.isDestroyed())) createMainWindow();
+        if (!BrowserWindow.getAllWindows().some((w) => !w.isDestroyed())) showNote();
     }).catch(() => null);
-}
-
-// Like Zoom, the home screen comes back after a class (sites with one). Not while quitting.
-let quitting = false;
-function backHome(meetingUrl) {
-    if (quitting) return;
-    const site = siteOfUrl(meetingUrl);
-    if (!site || !site.home) return;
-    if (BrowserWindow.getAllWindows().some((w) => w.lcMeeting && !w.isDestroyed())) return;
-    if (!mainWindow) {
-        createMainWindow();
-        return;
-    }
-    if (mainWindow.isMinimized()) mainWindow.restore();
-    mainWindow.show();
-    mainWindow.focus();
 }
 
 // ---- Updates ------------------------------------------------------------------------------------
@@ -1495,7 +1442,6 @@ function buildMenu() {
         {
             label: 'LiveClass',
             submenu: [
-                { label: 'Change site…', click: chooseSite, enabled: !devSite },
                 { label: 'Check for updates…', click: () => checkForUpdate(true) },
                 { role: 'reload' },
                 ...(app.isPackaged ? [] : [{ role: 'toggleDevTools' }]),
@@ -1525,16 +1471,17 @@ if (!app.requestSingleInstanceLock()) {
     app.on('second-instance', (event, argv) => {
         const link = linkFrom(argv);
         if (link) return openLink(link);
-        if (!mainWindow) return createMainWindow();
-        if (mainWindow.isMinimized()) mainWindow.restore();
-        return mainWindow.focus();
+        // Opened again by itself: the class, if one is open, or the note
+        const meeting = BrowserWindow.getAllWindows().find((w) => w.lcMeeting && !w.isDestroyed());
+        if (!meeting) return showNote();
+        if (meeting.isMinimized()) meeting.restore();
+        return meeting.focus();
     });
 
     // The windows are LiveClass's, not the website's: the site's page titles never replace their names.
     app.on('browser-window-created', (event, win) => {
         win.on('page-title-updated', (e) => e.preventDefault());
     });
-    app.on('before-quit', () => { quitting = true; });
 
     app.whenReady().then(() => {
         const ses = session.defaultSession;
@@ -1552,18 +1499,17 @@ if (!app.requestSingleInstanceLock()) {
         ses.on('will-download', saveDownload);
 
         buildMenu();
-        // Opened from a link: just the meeting, like Zoom (the main window opens when asked for).
+        // Opened from a link: just the class, like Zoom. By itself: the note (development: a class).
         if (pendingLink) openLink(pendingLink);
-        else createMainWindow();
+        else if (devSite) openLink(`${PROTOCOL}://open?url=${encodeURIComponent(devSite)}`);
+        else showNote();
         pendingLink = null;
-        app.on('activate', () => { if (!mainWindow) createMainWindow(); });
+        app.on('activate', () => { if (!BrowserWindow.getAllWindows().length) showNote(); });
         if (app.isPackaged) setTimeout(() => checkForUpdate(false), 4000);
     });
 
     app.on('will-quit', () => globalShortcut.unregisterAll());
 
-    app.on('window-all-closed', () => {
-        // The home screen opening as a class closes (backHome) keeps the app running.
-        if (process.platform !== 'darwin' && !BrowserWindow.getAllWindows().length) app.quit();
-    });
+    // The class ended (or the note was closed): LiveClass closes, on the Mac too.
+    app.on('window-all-closed', () => app.quit());
 }

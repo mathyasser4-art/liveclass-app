@@ -1,23 +1,19 @@
-## New in 1.7.1
+## New in 1.8.0
 
-- Opening a class from a website now switches LiveClass to that platform. Before, a computer that
-  once chose another platform (for example Mr. Shahin) kept showing it, even after reinstalling.
+LiveClass now works like the Zoom app, for every platform (SATAREA, Mr. Shahin, AIS and IGCSE):
 
-## New in 1.7.0
-
-- **IGCSE works like the Zoom app.** LiveClass opens its own home screen: sign in, see your classes,
-  press **Start**. No website pages inside the app any more, and the windows are called LiveClass.
-- After a class, the home screen comes back.
+- Press **Start LiveClass** on your website: your class opens in LiveClass, **already signed in**.
+- No platform to choose, no sign-in screen and no website pages inside the app.
+- When the class ends, LiveClass closes.
+- Opened by itself, LiveClass only tells you to start your class from your website.
 - LiveClass tells you when a new version is out (and **LiveClass → Check for updates…**).
-- A link LiveClass can't open now says so, instead of doing nothing.
 
 ## Download
 
 - **Windows:** [LiveClass-Setup.exe](https://github.com/mathyasser4-art/liveclass-app/releases/latest/download/LiveClass-Setup.exe)
 - **Mac:** [LiveClass.dmg](https://github.com/mathyasser4-art/liveclass-app/releases/latest/download/LiveClass.dmg)
 
-On the first launch, choose your platform (SATAREA, Mr. Shahin, AIS or IGCSE) and sign in. After that,
-"Start LiveClass" on the website opens your class in the app.
+After installing, press "Start LiveClass" on your website: your class opens in the app.
 
 ## The first time you install
 
@@ -28,16 +24,15 @@ The app is not signed with a certificate yet, so your computer asks before it op
   can't check it, go to **System Settings → Privacy & Security**, scroll down and click
   **Open Anyway**. The first screen share asks for **Screen Recording** permission there too.
 
-## الجديد في 1.7.1
+## الجديد في 1.8.0
 
-- فتح حصة من موقع ينقل LiveClass الآن إلى منصة ذلك الموقع. قبل ذلك كان الجهاز الذي اختار منصة أخرى سابقًا (مثل Mr. Shahin) يبقى عليها حتى بعد إعادة التثبيت.
+أصبح LiveClass يعمل مثل تطبيق Zoom لكل المنصات (SATAREA وMr. Shahin وAIS وIGCSE):
 
-## الجديد في 1.7.0
-
-- **منصة IGCSE تعمل مثل تطبيق Zoom.** يفتح LiveClass شاشته الرئيسية الخاصة: سجّل الدخول، وشاهد حصصك، واضغط **ابدأ**. لا تظهر صفحات الموقع داخل التطبيق بعد الآن.
-- بعد انتهاء الحصة تعود الشاشة الرئيسية.
-- يخبرك LiveClass عند توفر إصدار جديد (ومن القائمة **LiveClass ← Check for updates…**).
-- الرابط الذي لا يستطيع LiveClass فتحه يعرض الآن رسالة بدلًا من ألا يحدث شيء.
+- اضغط **Start LiveClass** على موقعك: تفتح حصتك في LiveClass **وأنت مسجّل الدخول**.
+- لا اختيار للمنصة، ولا شاشة تسجيل دخول، ولا صفحات من الموقع داخل التطبيق.
+- عند انتهاء الحصة يُغلق LiveClass.
+- إذا فتحت LiveClass وحده، فهو يخبرك فقط أن تبدأ حصتك من موقعك.
+- يخبرك LiveClass عند توفر إصدار جديد.
 
 ## تنزيل التطبيق
 

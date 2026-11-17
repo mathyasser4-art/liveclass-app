@@ -1,4 +1,4 @@
-/* The app's own pages (share picker, site choice), in the meeting's dark Zoom style. */
+/* The app's own pages (share picker, the note), in the meeting's dark Zoom style. */
 :root {
   --bg: #1a1a1a;
   --surface: #242424;
@@ -98,21 +98,9 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .btn.primary:hover { background: var(--accent-hover); }
 .btn:disabled { opacity: 0.5; cursor: default; }
 
-/* Site choice */
-.center { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 18px; padding: 24px; }
-.center h1 { margin: 0; font-size: 22px; }
-.center p { margin: 0; color: var(--dim); text-align: center; }
-.sites { display: flex; flex-direction: column; gap: 10px; width: min(360px, 100%); }
-.site {
-  border: 1px solid var(--border);
-  background: var(--surface);
-  border-radius: 12px;
-  padding: 14px 18px;
-  font-size: 16px;
-  font-weight: 600;
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-}
-.site:hover { border-color: var(--accent); background: var(--tile); }
-.site small { color: var(--dim); font-weight: 400; font-size: 12px; }
+/* The note shown when LiveClass is opened by itself */
+.center { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; padding: 24px; text-align: center; }
+.center h1 { margin: 0; font-size: 20px; }
+.center p { margin: 0; color: var(--dim); line-height: 1.5; max-width: 360px; }
+.mark { width: 52px; height: 52px; border-radius: 14px; background: #0e72ed; display: flex; align-items: center; justify-content: center; }
+.mark svg { width: 26px; height: 26px; }

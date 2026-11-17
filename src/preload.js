@@ -12,7 +12,8 @@ contextBridge.exposeInMainWorld('satDesktop', {
     platform: process.platform,
     // 'meeting' in a meeting window (its "back" closes the window).
     windowKind: arg('lc-window'),
-    // 1.7.0 on: a site with a home screen (/app) shows only it and the meetings in the app.
+    // 1.7.0 on: the website shows only the class in the app (no website pages), and signs the app in
+    // with the one-time code in the page address (#lc=...).
     appHome: true,
     // Minimizes the meeting window while sharing, and brings it back after.
     setSharing: (on) => ipcRenderer.send('lc:sharing', !!on),
@@ -70,11 +71,3 @@ contextBridge.exposeInMainWorld('satDesktop', {
         return () => ipcRenderer.removeListener('lc:toggle-controls', listener);
     }
 });
-
-// The first-launch site choice (site.html) runs in the main window too.
-if (window.location.protocol === 'file:') {
-    contextBridge.exposeInMainWorld('lcApp', {
-        sites: () => ipcRenderer.invoke('site:list'),
-        chooseSite: (id) => ipcRenderer.send('site:choose', id)
-    });
-}

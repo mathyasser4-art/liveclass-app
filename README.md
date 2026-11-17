@@ -20,15 +20,19 @@ adds what a browser can't do:
   shared, a see-through drawing layer covers it, so the teacher draws on any program. The mouse goes
   through the layer unless a tool is picked. When one window is shared, drawing happens on its
   picture in the meeting window.
-- **Platforms**: SATAREA, Mr. Shahin, AIS and IGCSE (chosen on first launch).
-- **Home screen (IGCSE, 1.7.0 on)**: a site with a `home` (IGCSE's `/app`) opens on it: sign in,
-  your classes, Start. The app shows only that page and the meetings; the site's other pages open in
-  the browser, the windows keep the name LiveClass, and the home screen comes back after a class.
+- **Only the class, like Zoom (1.8.0 on)**: one app for SATAREA, Mr. Shahin, AIS and IGCSE, with no
+  platform to choose. It opens when the teacher presses Start on a website, already signed in, and
+  closes when the class ends. It never shows website pages (other pages open in the browser), and
+  its windows keep the name LiveClass. Opened by itself it shows a note (`src/note.html`): start
+  your class from your website.
+- **Signed in by the website**: the website asks its backend for a one-time code
+  (`POST /live/app-link`, two minutes, used once) and puts it in the link; the app opens the class
+  with `#lc=<code>` and the page trades it (`POST /live/app-link/redeem`) for the website's own
+  sign-in (same session, no extra device).
 - **Update notice**: on launch (and LiveClass → Check for updates…) the app compares itself with the
   latest GitHub release and offers the download.
 - **Opens from the website**: "Start LiveClass" on the site (Windows/Mac) opens a
-  `liveclass://open?url=…` link, so the meeting opens straight in the app (signed in once with the
-  app's own login). Set `REACT_APP_LIVECLASS_DOWNLOAD_URL` on the website to show a download link.
+  `liveclass://open?url=…&code=…` link, so the meeting opens straight in the app, signed in. Set `REACT_APP_LIVECLASS_DOWNLOAD_URL` on the website to show a download link.
 - The bar and the drawing layer are left out of the screen capture. Students (in the browser) and
   cloud recordings get the strokes over the data channel, as with every annotation, so nothing is
   drawn twice.
@@ -37,20 +41,19 @@ Students and guests keep using the website.
 
 ## How it works
 
-- `src/main.js` (Electron main process): windows, the site choice (SATAREA / Mr. Shahin / AIS on
-  first launch, LiveClass → Change site… later), permissions, the share picker, and the floating
+- `src/main.js` (Electron main process): windows, liveclass:// links, permissions, the share picker, and the floating
   bar / drawing layer windows. Only our sites (`*.satarea.tech`, `*.mrshahin.com`) get camera,
   microphone, screen and the bridge; other links open in the normal browser.
 - `src/preload.js` exposes `window.satDesktop` to the site. The website's side is
   `src/pages/liveClass/desktopApp.js` in the SAT and IGCSE website repos: meetings open in their own window, and the meeting renders
   the bar (`lc-bar`) and drawing layer (`lc-annotate`) into windows the app places and styles.
-- `src/picker.*`, `src/site.*`: the app's own pages.
+- `src/picker.*`, `src/note.html`: the app's own pages.
 
 ## Run and build
 
 ```bash
 npm install
-npm start -- --site=http://localhost:3007   # against a local site (any URL; dev tools in the menu)
+npm start -- --site=http://localhost:3007/live/<courseId>   # a class on a local site (dev tools in the menu)
 npm start                                   # against the real sites
 npm run dist:win                            # dist/LiveClass-Setup-<version>.exe
 npm run dist:mac                            # dist/LiveClass-<version>.dmg (must run on a Mac)
