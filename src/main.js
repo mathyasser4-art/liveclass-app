@@ -1391,9 +1391,13 @@ function openLink(link) {
         notOurLink();
         return;
     }
-    // The first link also picks the site for the main window.
+    // The platform of the class just opened becomes the app's platform (home screen included): a
+    // teacher who once picked another one (the choice outlives reinstalling) isn't left on it.
     const site = siteOfUrl(target);
-    if (site && !readSettings().site) writeSettings({ ...readSettings(), site: site.id });
+    if (site && !devSite && readSettings().site !== site.id) {
+        writeSettings({ ...readSettings(), site: site.id });
+        if (mainWindow && !mainWindow.isDestroyed()) mainWindow.loadURL(startOf(site));
+    }
     const existing = BrowserWindow.getAllWindows().find((w) => w.lcMeeting && !w.isDestroyed());
     if (existing) {
         if (existing.webContents.getURL() !== target) existing.loadURL(target);

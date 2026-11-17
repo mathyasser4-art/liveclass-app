@@ -1,3 +1,8 @@
+## New in 1.7.1
+
+- Opening a class from a website now switches LiveClass to that platform. Before, a computer that
+  once chose another platform (for example Mr. Shahin) kept showing it, even after reinstalling.
+
 ## New in 1.7.0
 
 - **IGCSE works like the Zoom app.** LiveClass opens its own home screen: sign in, see your classes,
@@ -22,6 +27,10 @@ The app is not signed with a certificate yet, so your computer asks before it op
 - **Mac**: open the .dmg and drag LiveClass into Applications. Open it once; when the Mac says it
   can't check it, go to **System Settings → Privacy & Security**, scroll down and click
   **Open Anyway**. The first screen share asks for **Screen Recording** permission there too.
+
+## الجديد في 1.7.1
+
+- فتح حصة من موقع ينقل LiveClass الآن إلى منصة ذلك الموقع. قبل ذلك كان الجهاز الذي اختار منصة أخرى سابقًا (مثل Mr. Shahin) يبقى عليها حتى بعد إعادة التثبيت.
 
 ## الجديد في 1.7.0
 
