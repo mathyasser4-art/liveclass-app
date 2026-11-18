@@ -269,6 +269,10 @@ function controlZones(kids) {
             ? { left, right, top: b.y, bottom: b.y + b.height + 2 + TOOLS_ROOM }
             : { left, right, top: b.y - 2 - TOOLS_ROOM, bottom: b.y + b.height });
     }
+    if (videosAttached(kids) && kids[VIDEOS].isVisible()) {
+        const v = kids[VIDEOS].getBounds();
+        zones.push({ left: v.x, right: v.x + v.width, top: v.y, bottom: v.y + v.height });
+    }
     const pen = kids[ANNOT_BAR];
     if (live(pen) && pen.lcPlaced && !pen.lcDock) {
         const p = pen.getBounds();
@@ -314,7 +318,7 @@ function layoutRight(openerId) {
         right -= width + PANEL_GAP;
     });
     const videos = kids[VIDEOS];
-    if (live(videos) && videos.lcPlaced && !videos.lcMoved) {
+    if (live(videos) && videos.lcPlaced && !videos.lcMoved && !videosAttached(kids)) {
         const b = videos.getBounds();
         moveQuietly(videos, { x: right - b.width, y: b.y, width: b.width, height: b.height });
     }
@@ -341,6 +345,53 @@ function placeTools(openerId, width, height) {
     let y = b.y + b.height + 2 - (anchor ? anchor.y : 0);
     if (y + h > area.y + area.height) y = Math.max(area.y, b.y - h - 2);
     setBoundsQuietly(tools, { x, y, width: w, height: h });
+    placeVideos(openerId);
+}
+
+// Like Zoom's, the video window (the preview of the shared screen, whoever is talking) hangs centred
+// under the share toolbar and moves with it, and the pen bar goes under it. Once the teacher drags
+// the video window away it stays where it was put; with the toolbar docked at a screen edge the video
+// window stays where it is too.
+const TOOLBAR_ROOM = 62;
+const UNDER_GAP = 6;
+const videosAttached = (kids) => {
+    const videos = kids[VIDEOS];
+    const bar = kids[BAR];
+    return live(videos) && videos.lcPlaced && !videos.lcMoved && live(bar) && bar.lcPlaced && !bar.lcDock;
+};
+function placeVideos(openerId) {
+    const kids = childrenOf(openerId);
+    if (!videosAttached(kids)) return;
+    const videos = kids[VIDEOS];
+    const bar = kids[BAR];
+    const b = bar.getBounds();
+    const area = screen.getDisplayMatching(b).workArea;
+    const [w, h] = sizeOf(videos);
+    let x = Math.round(barCentre(bar, b) - w / 2);
+    x = Math.max(area.x, Math.min(x, area.x + area.width - w));
+    // Under the pill and the toolbar's room; above them when the pill is at the bottom of the screen
+    let y = b.y + b.height + 2 + TOOLBAR_ROOM;
+    if (y + h > area.y + area.height) y = Math.max(area.y, b.y - 2 - TOOLBAR_ROOM - h);
+    setBoundsQuietly(videos, { x, y, width: w, height: h });
+    placePenUnderVideos(openerId);
+}
+// The pen bar, until the teacher moves it, stands under the video window (when it shows)
+function placePenUnderVideos(openerId) {
+    const kids = childrenOf(openerId);
+    const pen = kids[ANNOT_BAR];
+    const videos = kids[VIDEOS];
+    if (!live(pen) || !pen.lcPlaced || pen.lcMoved || pen.lcDock || pen.lcDrag) return;
+    if (!videosAttached(kids) || !videos.isVisible()) return;
+    const v = videos.getBounds();
+    const area = screen.getDisplayMatching(v).workArea;
+    const [w, h] = sizeOf(pen);
+    const anchor = pen.lcAnchor;
+    let x = Math.round(v.x + v.width / 2 - anchorMid(anchor, w));
+    x = Math.max(area.x, Math.min(x, area.x + area.width - w));
+    let y = v.y + v.height + UNDER_GAP - (anchor ? anchor.y : 0);
+    if (y + h > area.y + area.height) y = Math.max(area.y, v.y - h - UNDER_GAP);
+    pen.lcCenter = x + anchorMid(anchor, w);
+    setBoundsQuietly(pen, { x, y, width: w, height: h });
 }
 
 // Our own resizes must not count as the teacher moving a toolbar.
@@ -1045,6 +1096,8 @@ function applySize(win, openerId, name, width, height, anchor = win.lcAnchor) {
         win.lcCenter = home.x + anchorMid(anchor, w);
         setBoundsQuietly(win, home);
         if (name === BAR) placeTools(openerId);
+        if (name === VIDEOS) placeVideos(openerId);
+        if (name === ANNOT_BAR) placePenUnderVideos(openerId);
         // Participants or Chat may already stand where the video window or a toolbar would go.
         if (name !== BAR_TOOLS) layoutRight(openerId);
         return;
@@ -1078,6 +1131,8 @@ function applySize(win, openerId, name, width, height, anchor = win.lcAnchor) {
     }
     setBoundsQuietly(win, { x, y, width: w, height: h });
     if (name === BAR) placeTools(openerId);
+    // A view with a bigger picture keeps the video window under the toolbar, and the pen bar under it
+    if (name === VIDEOS) placeVideos(openerId);
     // A toolbar docking, undocking or changing size moves Participants and Chat clear of it (no move
     // when nothing changed).
     if (name === BAR || name === ANNOT_BAR) layoutRight(openerId);
@@ -1094,6 +1149,8 @@ ipcMain.on('lc:float-visible', (event, name, visible) => {
     }
     if (name === BAR_TOOLS) placeTools(event.sender.id);
     win.showInactive();
+    if (name === VIDEOS) placeVideos(event.sender.id);
+    if (name === ANNOT_BAR) placePenUnderVideos(event.sender.id);
     if (name === ANNOT_BAR && win.lcDock === 'right') layoutRight(event.sender.id);
     return raiseFloating(event.sender.id);
 });

@@ -1,3 +1,10 @@
+## New in 1.8.1
+
+- While you share your screen, the preview box (your shared screen, and who is talking) hangs right
+  under the share toolbar, like Zoom's, and moves with it when you drag the toolbar. The pen bar goes
+  under the preview. Drag the preview away and it stays where you put it.
+- **Record** is a button on the share toolbar (no longer under More).
+
 ## New in 1.8.0
 
 LiveClass now works like the Zoom app, for every platform (SATAREA, Mr. Shahin, AIS and IGCSE):
@@ -23,6 +30,11 @@ The app is not signed with a certificate yet, so your computer asks before it op
 - **Mac**: open the .dmg and drag LiveClass into Applications. Open it once; when the Mac says it
   can't check it, go to **System Settings → Privacy & Security**, scroll down and click
   **Open Anyway**. The first screen share asks for **Screen Recording** permission there too.
+
+## الجديد في 1.8.1
+
+- أثناء مشاركة الشاشة، يظهر مربع المعاينة أسفل شريط أدوات المشاركة مباشرة مثل Zoom، ويتحرك معه عند سحبه. ويظهر شريط القلم أسفل المعاينة.
+- زر **التسجيل** موجود الآن على شريط أدوات المشاركة.
 
 ## الجديد في 1.8.0
 
