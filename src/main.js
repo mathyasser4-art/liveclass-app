@@ -1,25 +1,30 @@
-// LiveClass desktop app for teachers. It loads the live website (so site updates need no reinstall)
-// and adds what a browser can't do, the way the Zoom app works:
+// LiveClass desktop app, for teachers and students, the way the Zoom app works:
+//  - its own home window (home.html, nothing loaded from a website): sign in, New Meeting, Join and
+//    your classes. It talks to the platforms' servers itself (account.js), not to their websites.
+//  - the class runs in a meeting window showing only the class screen (loaded from the platform, so
+//    class updates need no reinstall), already signed in with a one-time pass; after the class, home
+//    comes back.
+// On top it adds what a browser can't do:
 //  - its own share picker (screens and windows) and no browser "Stop sharing / Hide" bar,
 //  - while sharing the meeting window minimizes; the "You are screen sharing" pill/toolbar, the
 //    annotation toolbar and a small video window float on top,
 //  - annotations drawn on a see-through layer (with Zoom's green border) over the shared screen; a
 //    shared window gets the green border too, following it (Windows),
-//  - liveclass:// links: "Start LiveClass" on the website opens the meeting straight in the app.
-//  - Like the Zoom app, it is only the class: it opens when the teacher presses Start on any of our
-//    websites, already signed in (the website's one-time code), and closes after the class. No
-//    platform to choose, no website pages. It says when an update is out.
+//  - liveclass:// links: Start / Join on a website opens the class straight in the app (and signs the
+//    app in); "Sign in with your browser" comes back as liveclass://signin. It says when an update is out.
 //  - Participants and Chat open as windows of their own over the shared screen, like Zoom's.
 //  - Save (annotations) writes straight to Documents/LiveClass, one folder per meeting, no dialog.
 // The floating windows, the drawing layer, the share picker and (while sharing) the meeting window are
 // left out of the screen capture: students never see LiveClass itself, and they get the strokes over
 // the data channel (as they do today), so nothing is drawn twice.
 const {
-    app, BrowserWindow, Menu, desktopCapturer, dialog, globalShortcut, ipcMain, nativeImage, net, screen, session, shell,
-    systemPreferences, webContents
+    app, BrowserWindow, Menu, desktopCapturer, dialog, globalShortcut, ipcMain, nativeImage, net, safeStorage, screen, session,
+    shell, systemPreferences, webContents
 } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const crypto = require('crypto');
+const { createAccount, PLATFORMS } = require('./account');
 
 const SITES = [
     { id: 'satarea', name: 'SATAREA', url: 'https://satarea.tech' },
@@ -65,11 +70,27 @@ const PANELS = [PEOPLE, CHAT];
 const FLOATING = [BAR, BAR_TOOLS, ANNOT_BAR, VIDEOS, ...PANELS];
 const PROTOCOL = 'liveclass';
 
+// Development: LIVECLASS_PLATFORMS='{"igcse":{"api":"http://localhost:54112","site":"http://localhost:3007"}}'
+// points the app's account at local servers (never in an installed app).
+const devPlatforms = (() => {
+    if (app.isPackaged || !process.env.LIVECLASS_PLATFORMS) return null;
+    try {
+        const list = JSON.parse(process.env.LIVECLASS_PLATFORMS);
+        return Object.fromEntries(Object.entries(list).map(([id, p]) => [id, {
+            name: p.name || id.toUpperCase(), api: p.api, site: p.site, hosts: (host) => host === new URL(p.site).hostname
+        }]));
+    } catch (e) {
+        return null;
+    }
+})();
+const devOrigins = devPlatforms ? Object.values(devPlatforms).map((p) => new URL(p.site).origin) : [];
+
 // Our sites get the app bridge, camera, microphone and screen, and stay inside the app.
 const isOurs = (url) => {
     try {
         const u = new URL(url);
         if (devSite && u.origin === new URL(devSite).origin) return true;
+        if (devOrigins.includes(u.origin)) return true;
         return u.protocol === 'https:' && (/(^|\.)(satarea\.tech|mrshahin\.com)$/.test(u.hostname) || OUR_HOSTS.includes(u.hostname));
     } catch (e) {
         return false;
@@ -570,34 +591,149 @@ function wireContents(contents) {
     });
 }
 
-// Opened by itself (not from a website): a small note saying where classes start, like Zoom without
-// a meeting. Its page is in the app; nothing loads from the internet.
-let noteWindow = null;
-function showNote() {
-    if (noteWindow && !noteWindow.isDestroyed()) {
-        if (noteWindow.isMinimized()) noteWindow.restore();
-        noteWindow.focus();
-        return;
+// ---- Home (the app's own window, like the Zoom app's) -----------------------------------------------
+// Sign in, New Meeting, Join and your classes. Its page is in the app; it reaches the platforms only
+// through the main process (account.js), never by loading a website.
+let homeWindow = null;
+const homeContents = () => (homeWindow && !homeWindow.isDestroyed() ? homeWindow.webContents : null);
+function showHome() {
+    if (homeWindow && !homeWindow.isDestroyed()) {
+        if (homeWindow.isMinimized()) homeWindow.restore();
+        homeWindow.show();
+        homeWindow.focus();
+        return homeWindow;
     }
-    noteWindow = new BrowserWindow({
-        width: 460,
-        height: 340,
-        resizable: false,
-        maximizable: false,
-        fullscreenable: false,
+    homeWindow = new BrowserWindow({
+        width: 1000,
+        height: 640,
+        minWidth: 720,
+        minHeight: 520,
         title: 'LiveClass',
         icon: ICON,
         backgroundColor: '#1a1a1a',
         autoHideMenuBar: true,
-        webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false }
+        webPreferences: {
+            preload: path.join(__dirname, 'home-preload.js'),
+            sandbox: true,
+            contextIsolation: true,
+            nodeIntegration: false,
+            additionalArguments: [`--lc-version=${app.getVersion()}`]
+        }
     });
-    noteWindow.setMenuBarVisibility(false);
-    noteWindow.loadFile(path.join(__dirname, 'note.html'));
-    noteWindow.on('closed', () => { noteWindow = null; });
+    homeWindow.setMenuBarVisibility(false);
+    homeWindow.loadFile(path.join(__dirname, 'home.html'));
+    // Links in it (none today) open in the browser, never inside the app
+    homeWindow.webContents.setWindowOpenHandler(({ url }) => {
+        openOutside(url);
+        return { action: 'deny' };
+    });
+    homeWindow.webContents.on('will-navigate', (event) => event.preventDefault());
+    homeWindow.on('closed', () => { homeWindow = null; });
+    return homeWindow;
 }
-const closeNote = () => {
-    if (noteWindow && !noteWindow.isDestroyed()) noteWindow.close();
+// Tells home the sign-in changed (a website's Start, the browser sign-in), with { error } when it failed.
+const tellHome = (change = {}) => {
+    const contents = homeContents();
+    if (contents) contents.send('home:changed', change);
 };
+
+// ---- The app's account --------------------------------------------------------------------------
+// Kept in the app's own folder; the sign-in itself is encrypted with the computer's keychain when it
+// has one (Windows, Mac). A random id names this computer to the platforms ("LiveClass app (Windows)").
+const dataFile = (name) => path.join(app.getPath('userData'), name);
+const readJson = (name) => {
+    try {
+        return JSON.parse(fs.readFileSync(dataFile(name), 'utf8'));
+    } catch (e) {
+        return null;
+    }
+};
+const writeJson = (name, value) => {
+    try {
+        fs.mkdirSync(app.getPath('userData'), { recursive: true });
+        fs.writeFileSync(dataFile(name), JSON.stringify(value), { mode: 0o600 });
+    } catch (e) {
+        // Without the file the app simply asks to sign in again next time.
+    }
+};
+const canEncrypt = () => {
+    try {
+        return safeStorage.isEncryptionAvailable();
+    } catch (e) {
+        return false;
+    }
+};
+const accountStore = {
+    load: () => {
+        const saved = readJson('account.json');
+        if (!saved || !saved.session) return null;
+        const { token, sealed, ...rest } = saved.session;
+        try {
+            return { ...rest, token: sealed ? safeStorage.decryptString(Buffer.from(sealed, 'base64')) : token };
+        } catch (e) {
+            return null;
+        }
+    },
+    save: (value) => {
+        if (!value) return writeJson('account.json', {});
+        const { token, ...rest } = value;
+        writeJson('account.json', {
+            session: canEncrypt() ? { ...rest, sealed: safeStorage.encryptString(token).toString('base64') } : { ...rest, token }
+        });
+    }
+};
+const deviceId = () => {
+    const saved = readJson('device.json');
+    if (saved && /^[A-Za-z0-9_-]{8,64}$/.test(saved.id || '')) return saved.id;
+    const id = `lc-${crypto.randomBytes(12).toString('hex')}`;
+    writeJson('device.json', { id });
+    return id;
+};
+const SYSTEM_NAMES = { win32: 'Windows', darwin: 'Mac', linux: 'Linux' };
+let account = null;
+const getAccount = () => {
+    if (!account) {
+        account = createAccount({
+            fetch: (url, options) => net.fetch(url, options),
+            store: accountStore,
+            deviceId: deviceId(),
+            deviceName: `LiveClass app (${SYSTEM_NAMES[process.platform] || process.platform})`,
+            platforms: devPlatforms || PLATFORMS
+        });
+    }
+    return account;
+};
+
+// Home's questions. Only the home window may ask; every answer is { ok, ... } or { ok: false, code, message }.
+const fromHome = (event) => !!homeContents() && event.sender === homeContents();
+const answer = (name, fn) => ipcMain.handle(name, async (event, ...args) => {
+    if (!fromHome(event)) return { ok: false, code: 'denied', message: 'Not allowed' };
+    try {
+        return { ok: true, ...((await fn(...args)) || {}) };
+    } catch (e) {
+        return { ok: false, code: e.code || 'error', message: e.message || 'Something went wrong' };
+    }
+});
+answer('home:state', () => ({ user: getAccount().user(), platforms: getAccount().platformList() }));
+answer('home:sign-in', (login, password) => getAccount().signIn(login, password));
+answer('home:choose', (platform) => getAccount().choose(platform));
+answer('home:sign-out', () => getAccount().signOut());
+answer('home:classes', () => getAccount().classes());
+answer('home:open-class', async (courseId) => {
+    openMeeting(await getAccount().classUrl(courseId));
+});
+answer('home:join', async (text) => {
+    openMeeting(await getAccount().joinUrl(text));
+});
+// Google accounts (no password) sign in on the platform in the browser; it comes back as liveclass://signin.
+answer('home:browser-sign-in', async (platform) => {
+    const site = getAccount().siteOf(platform);
+    if (!site) throw Object.assign(new Error('Pick where your account is.'), { code: 'missing' });
+    await shell.openExternal(`${site}/live/app-signin`);
+});
+ipcMain.on('home:check-updates', (event) => {
+    if (fromHome(event)) checkForUpdate(true);
+});
 
 // ---- Share picker (Zoom's "Select a window or an application that you want to share") -----------
 const pageLanguage = (contents) => contents.executeJavaScript("localStorage.getItem('i18nextLng') || document.documentElement.lang || ''", true)
@@ -1391,34 +1527,11 @@ ipcMain.on('lc:annotating', (event, mode) => {
     raiseFloating(event.sender.id);
 });
 
-// ---- liveclass:// links ------------------------------------------------------------------------
-// liveclass://open?url=<https://satarea.tech/live/<courseId>>&code=<one-time sign-in>, from "Start
-// LiveClass" on the website: the class opens in its own window, signed in as the teacher (the page
-// trades the code, given as #lc=..., for the website's sign-in).
-const linkFrom = (argv) => (argv || []).find((a) => typeof a === 'string' && a.startsWith(`${PROTOCOL}://`));
-let pendingLink = linkFrom(process.argv);
-
-function openLink(link) {
-    let target;
-    let code = '';
-    try {
-        const params = new URL(link).searchParams;
-        target = params.get('url');
-        code = params.get('code') || '';
-    } catch (e) {
-        return;
-    }
-    if (!target || !isOurs(target) || !keptInApp(target)) {
-        notOurLink();
-        return;
-    }
-    let page = target;
-    if (/^[A-Za-z0-9_-]{20,64}$/.test(code)) {
-        const u = new URL(target);
-        u.hash = `lc=${code}`;
-        page = u.href;
-    }
-    closeNote();
+// ---- Meetings ------------------------------------------------------------------------------------
+// The class in its own window (one at a time, like Zoom); home stays behind it and comes back after.
+let quitting = false;
+function openMeeting(page) {
+    if (!isOurs(page) || !keptInApp(page)) throw Object.assign(new Error('This is not a LiveClass link.'), { code: 'not_class' });
     const existing = BrowserWindow.getAllWindows().find((w) => w.lcMeeting && !w.isDestroyed());
     if (existing) {
         existing.loadURL(page);
@@ -1433,6 +1546,81 @@ function openLink(link) {
     wireWindowState(win);
     win.loadURL(page);
 }
+// The class ended or its window was closed: back home (with the live classes fresh), like Zoom.
+app.on('browser-window-created', (event, win) => {
+    win.once('closed', () => {
+        if (!win.lcMeeting || quitting) return;
+        if (BrowserWindow.getAllWindows().some((w) => w.lcMeeting && !w.isDestroyed())) return;
+        showHome();
+        tellHome();
+    });
+});
+
+// ---- liveclass:// links ------------------------------------------------------------------------
+// liveclass://open?url=<https://satarea.tech/live/<courseId>>&code=<one-time sign-in>, from Start or Join
+// on a website: the class opens in the meeting window, and the app keeps the sign-in (the code is traded
+// here, and the page gets a fresh one), so home shows your classes afterwards.
+// liveclass://signin?code=...&site=<website>: "Sign in with your browser" finished on the website.
+const linkFrom = (argv) => (argv || []).find((a) => typeof a === 'string' && a.startsWith(`${PROTOCOL}://`));
+let pendingLink = linkFrom(process.argv);
+
+async function openLink(link) {
+    let parsed;
+    try {
+        parsed = new URL(link);
+    } catch (e) {
+        return;
+    }
+    const params = parsed.searchParams;
+    const code = params.get('code') || '';
+    if (parsed.host === 'signin') {
+        showHome();
+        const site = params.get('site') || '';
+        const platform = getAccount().platformOf(site);
+        try {
+            if (!platform || !isOurs(site)) throw new Error("This sign-in link can't open in LiveClass.");
+            await getAccount().redeem(platform, code, site);
+            tellHome();
+        } catch (e) {
+            tellHome({ error: e.message || 'Signing in did not work. Please try again.' });
+        }
+        return;
+    }
+    const target = params.get('url');
+    if (!target || !isOurs(target) || !keptInApp(target)) {
+        notOurLink();
+        return;
+    }
+    // Normally: trade the website's code (the app is now signed in), then a fresh one for the page.
+    // If that fails, the page trades the website's code itself as before; a code that has expired
+    // still opens the class when the app is signed in to that platform.
+    let page = target;
+    const validCode = /^[A-Za-z0-9_-]{20,64}$/.test(code);
+    const platform = getAccount().platformOf(target);
+    const user = getAccount().user();
+    try {
+        if (platform && validCode) {
+            await getAccount().redeem(platform, code, target);
+            tellHome();
+            page = await getAccount().joinUrl(target);
+        } else if (platform && user && user.platform === platform) {
+            page = await getAccount().joinUrl(target);
+        } else if (validCode) {
+            page = withCode(target, code);
+        }
+    } catch (e) {
+        if (validCode && !(e && e.status === 410) && !getAccount().user()) page = withCode(target, code);
+        else if (platform && getAccount().user() && getAccount().user().platform === platform) {
+            page = await getAccount().joinUrl(target).catch(() => target);
+        }
+    }
+    openMeeting(page);
+}
+const withCode = (target, code) => {
+    const u = new URL(target);
+    u.hash = `lc=${code}`;
+    return u.href;
+};
 
 // Before 1.7.0 a link the app couldn't open did nothing at all (the teacher saw nothing happen).
 function notOurLink() {
@@ -1440,11 +1628,11 @@ function notOurLink() {
         type: 'warning',
         title: 'LiveClass',
         message: "This link can't open in LiveClass",
-        detail: 'It is not a class link of SATAREA, Mr. Shahin, AIS or IGCSE. If it came from your school '
-            + "website, update LiveClass (LiveClass → Check for updates…).\n\nهذا الرابط لا يفتح في LiveClass. إذا كان من موقع مدرستك، حدّث التطبيق.",
+        detail: 'It is not a LiveClass link. If your teacher sent it, update LiveClass (LiveClass → Check for updates…).'
+            + "\n\nهذا الرابط ليس رابط حصة LiveClass. إذا أرسله معلمك، حدّث التطبيق.",
         buttons: ['OK']
     }).then(() => {
-        if (!BrowserWindow.getAllWindows().some((w) => !w.isDestroyed())) showNote();
+        if (!BrowserWindow.getAllWindows().some((w) => !w.isDestroyed())) showHome();
     }).catch(() => null);
 }
 
@@ -1499,6 +1687,7 @@ function buildMenu() {
         {
             label: 'LiveClass',
             submenu: [
+                { label: 'Home', accelerator: 'CmdOrCtrl+Shift+H', click: () => showHome() },
                 { label: 'Check for updates…', click: () => checkForUpdate(true) },
                 { role: 'reload' },
                 ...(app.isPackaged ? [] : [{ role: 'toggleDevTools' }]),
@@ -1528,9 +1717,9 @@ if (!app.requestSingleInstanceLock()) {
     app.on('second-instance', (event, argv) => {
         const link = linkFrom(argv);
         if (link) return openLink(link);
-        // Opened again by itself: the class, if one is open, or the note
+        // Opened again by itself: the class, if one is open, or home
         const meeting = BrowserWindow.getAllWindows().find((w) => w.lcMeeting && !w.isDestroyed());
-        if (!meeting) return showNote();
+        if (!meeting) return showHome();
         if (meeting.isMinimized()) meeting.restore();
         return meeting.focus();
     });
@@ -1556,17 +1745,18 @@ if (!app.requestSingleInstanceLock()) {
         ses.on('will-download', saveDownload);
 
         buildMenu();
-        // Opened from a link: just the class, like Zoom. By itself: the note (development: a class).
+        // Opened from a link: the class, like Zoom. By itself: home (development: a class).
         if (pendingLink) openLink(pendingLink);
         else if (devSite) openLink(`${PROTOCOL}://open?url=${encodeURIComponent(devSite)}`);
-        else showNote();
+        else showHome();
         pendingLink = null;
-        app.on('activate', () => { if (!BrowserWindow.getAllWindows().length) showNote(); });
+        app.on('activate', () => { if (!BrowserWindow.getAllWindows().length) showHome(); });
         if (app.isPackaged) setTimeout(() => checkForUpdate(false), 4000);
     });
 
+    app.on('before-quit', () => { quitting = true; });
     app.on('will-quit', () => globalShortcut.unregisterAll());
 
-    // The class ended (or the note was closed): LiveClass closes, on the Mac too.
+    // Home closed with no class open: LiveClass closes, on the Mac too.
     app.on('window-all-closed', () => app.quit());
 }

@@ -1,12 +1,23 @@
-# LiveClass desktop app (teachers)
+# LiveClass desktop app
 
 **Download:** [Windows](https://github.com/mathyasser4-art/liveclass-app/releases/latest/download/LiveClass-Setup.exe) ·
 [Mac](https://github.com/mathyasser4-art/liveclass-app/releases/latest/download/LiveClass.dmg) ·
 [all versions](https://github.com/mathyasser4-art/liveclass-app/releases)
 
-A Windows / macOS app around the live website, for teachers who want the Zoom-app experience.
-It loads the site itself, so every website update reaches the app without reinstalling. On top it
-adds what a browser can't do:
+A Windows / macOS app that works like the Zoom app, for teachers and students:
+
+- **Its own home (1.9.0 on)**: sign in, **New Meeting** (teachers), **Join**, the time, and your classes
+  with the live ones first (`src/home.*`). It never shows a website: the app talks to the platforms'
+  servers itself (`src/account.js`): IGCSE and SAT (which also serves Mr. Shahin and AIS).
+- **Its own sign-in**: email, username or phone and password, tried on every platform (an account on
+  two is asked which one). Google accounts use **Sign in with your browser**: the platform's
+  `/live/app-signin` page hands the app a one-time pass as `liveclass://signin?code=…&site=…`. The
+  sign-in is kept in the app's folder, encrypted with the computer's keychain where there is one.
+- **The class** opens in its own window showing only the class screen, loaded from the platform (so
+  class updates reach the app without reinstalling) with a fresh one-time pass (`#lc=…`), already
+  signed in. After the class, home comes back.
+
+On top it adds what a browser can't do:
 
 - **Own share picker** (screens and windows, optional computer sound on Windows) and **no browser
   "Stop sharing / Hide" bar**.
@@ -20,24 +31,21 @@ adds what a browser can't do:
   shared, a see-through drawing layer covers it, so the teacher draws on any program. The mouse goes
   through the layer unless a tool is picked. When one window is shared, drawing happens on its
   picture in the meeting window.
-- **Only the class, like Zoom (1.8.0 on)**: one app for SATAREA, Mr. Shahin, AIS and IGCSE, with no
-  platform to choose. It opens when the teacher presses Start on a website, already signed in, and
-  closes when the class ends. It never shows website pages (other pages open in the browser), and
-  its windows keep the name LiveClass. Opened by itself it shows a note (`src/note.html`): start
-  your class from your website.
-- **Signed in by the website**: the website asks its backend for a one-time code
-  (`POST /live/app-link`, two minutes, used once) and puts it in the link; the app opens the class
-  with `#lc=<code>` and the page trades it (`POST /live/app-link/redeem`) for the website's own
-  sign-in (same session, no extra device).
+- **One app for every platform**: its windows keep the name LiveClass, and any page that is not a
+  class opens in the browser.
+- **One-time passes**: a one-time code (`POST /live/app-link`, two minutes, used once) is traded
+  (`POST /live/app-link/redeem`) for the same sign-in. Start or Join on a website opens
+  `liveclass://open?url=…&code=…`: the app trades the code (and is then signed in, sharing the
+  website's session, so no extra device), and the class page gets a fresh one.
 - **Update notice**: on launch (and LiveClass → Check for updates…) the app compares itself with the
   latest GitHub release and offers the download.
-- **Opens from the website**: "Start LiveClass" on the site (Windows/Mac) opens a
-  `liveclass://open?url=…&code=…` link, so the meeting opens straight in the app, signed in. Set `REACT_APP_LIVECLASS_DOWNLOAD_URL` on the website to show a download link.
+- **Opens from the website**: Start or Join on the site (Windows/Mac) opens the class straight in the
+  app, signed in. Set `REACT_APP_LIVECLASS_DOWNLOAD_URL` on the website to show a download link.
 - The bar and the drawing layer are left out of the screen capture. Students (in the browser) and
   cloud recordings get the strokes over the data channel, as with every annotation, so nothing is
   drawn twice.
 
-Students and guests keep using the website.
+Anyone without the app can still join from the browser (the website offers it).
 
 ## How it works
 
@@ -47,14 +55,19 @@ Students and guests keep using the website.
 - `src/preload.js` exposes `window.satDesktop` to the site. The website's side is
   `src/pages/liveClass/desktopApp.js` in the SAT and IGCSE website repos: meetings open in their own window, and the meeting renders
   the bar (`lc-bar`) and drawing layer (`lc-annotate`) into windows the app places and styles.
-- `src/picker.*`, `src/note.html`: the app's own pages.
+- `src/account.js`: the app's account (sign-in, classes, one-time passes, Join links), plain Node so
+  `npm test` checks it against fake servers. `src/home.*` and `src/home-preload.js` (`window.lcHome`):
+  the home window. `src/picker.*`: the share picker.
 
 ## Run and build
 
 ```bash
 npm install
+npm test                                    # the account (sign-in, classes, links)
 npm start -- --site=http://localhost:3007/live/<courseId>   # a class on a local site (dev tools in the menu)
-npm start                                   # against the real sites
+npm start                                   # against the real platforms
+# home against local servers (development only):
+LIVECLASS_PLATFORMS='{"igcse":{"api":"http://localhost:54112","site":"http://localhost:3007"}}' npm start
 npm run dist:win                            # dist/LiveClass-Setup-<version>.exe
 npm run dist:mac                            # dist/LiveClass-<version>.dmg (must run on a Mac)
 ```

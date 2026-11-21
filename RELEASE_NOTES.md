@@ -1,3 +1,19 @@
+## New in 1.9.0
+
+LiveClass now works by itself, like the Zoom app, for teachers **and students**:
+
+- **Open LiveClass and sign in** with your email, username or phone and your password. Signed up
+  with Google? Use **Sign in with your browser**. You no longer need to go to the website.
+- **Home**, like Zoom's: **New Meeting** (teachers) and **Join** tiles, the time, and **your classes**
+  with the live ones first. Start, return to, or join a class in one click.
+- **Join** with the link your teacher sent (an invite link works without signing in).
+- After the class you are back at home; LiveClass no longer closes.
+- Start or Join on the website still opens the class here, and now signs LiveClass in too.
+- In Arabic when your computer is in Arabic.
+
+Signing in with a password counts as one of your account's devices, like a new browser. Signing in
+through the website (its Start button, or Sign in with your browser) does not.
+
 ## New in 1.8.1
 
 - While you share your screen, the preview box (your shared screen, and who is talking) hangs right
