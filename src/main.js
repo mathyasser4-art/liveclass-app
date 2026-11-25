@@ -544,6 +544,8 @@ function wireContents(contents) {
         if (frameName === OVERLAY) return setUpOverlay(win, contents.id);
         if (isOurs(url)) {
             win.lcMeeting = frameName === MEETING;
+            // Like Zoom's meeting window: big, so a shared screen is big for students.
+            if (win.lcMeeting) win.maximize();
             win.setMenuBarVisibility(false);
             wireContents(win.webContents);
             wireWindowState(win);
@@ -1541,6 +1543,8 @@ function openMeeting(page) {
     }
     const win = new BrowserWindow(meetingWindowOptions());
     win.lcMeeting = true;
+    // Like Zoom's meeting window: big, so a shared screen is big for students.
+    win.maximize();
     win.setMenuBarVisibility(false);
     wireContents(win.webContents);
     wireWindowState(win);

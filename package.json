@@ -1,7 +1,7 @@
 {
   "name": "liveclass-desktop",
   "productName": "LiveClass",
-  "version": "1.9.0",
+  "version": "1.9.1",
   "description": "LiveClass desktop app, like the Zoom app: sign in, start or join your classes, share anything and annotate anywhere on the screen",
   "author": "SATAREA",
   "private": true,

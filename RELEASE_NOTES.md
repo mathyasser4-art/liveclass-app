@@ -1,3 +1,30 @@
+## New in 1.9.1
+
+Screen sharing now looks like Zoom for your students:
+
+- **The shared screen is about twice as big**: it fills the class window, with the videos beside it
+  (or hidden), and "Mr. X is sharing · View Options" at the top.
+- **View Options**: Fit to window, 100% (original size), 150%, 200% or 300%, full screen, and show or
+  hide the videos. Ctrl + mouse wheel, or a pinch on a touchpad or phone, zooms in; drag to move around.
+- **Double-click the shared screen for full screen**: the share fills the whole screen and the
+  buttons hide until you move the mouse.
+- **Sharper text**: students on laptops with 125% or 150% display scaling now get the full-quality
+  picture.
+- The class window opens maximized, like Zoom's.
+
+Students in the browser get all of this already (it comes from the website); the app update adds
+the bigger class window.
+
+## الجديد في 1.9.1
+
+أصبحت مشاركة الشاشة مثل Zoom عند طلابك:
+
+- **الشاشة المشتركة أكبر بنحو الضعف**: تملأ نافذة الحصة، والفيديوهات بجانبها (أو مخفية)، وفي الأعلى «Mr. X يشارك الشاشة · خيارات العرض».
+- **خيارات العرض**: ملاءمة للنافذة، 100% (الحجم الأصلي)، 150%، 200% أو 300%، وملء الشاشة، وإظهار الفيديوهات أو إخفاؤها. ويمكن التكبير بـ Ctrl مع عجلة الفأرة أو بإصبعين، والسحب للتنقل.
+- **انقر مرتين على الشاشة المشتركة لملء الشاشة**: تملأ المشاركة الشاشة كلها وتختفي الأزرار حتى تحرك الفأرة.
+- **نص أوضح**: الطلاب على أجهزة بتكبير عرض 125% أو 150% يحصلون الآن على الصورة بالجودة الكاملة.
+- تفتح نافذة الحصة بالحجم الكامل مثل Zoom.
+
 ## New in 1.9.0
 
 LiveClass now works by itself, like the Zoom app, for teachers **and students**:
